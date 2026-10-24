@@ -1,0 +1,4 @@
+discord.py
+google-genai
+aiohttp
+certifi
