@@ -79,12 +79,12 @@ async def start_luca(ctx):
 
     if now < state["cooldown_until"]:
         remaining = int(state["cooldown_until"] - now)
-        await ctx.reply(f"I'm on a brief cooldown right now. Please wait {remaining} seconds! 💛")
+        await ctx.reply(f"I'm on a brief cooldown right now. Please wait {remaining} seconds! 😅")
         return
 
     state["active"] = True
     state["msg_count"] = 0
-    await ctx.reply("I'm awake and ready to chat! 💛")
+    await ctx.reply("I'm awake and ready to talk! 💛")
 
 @bot.command(name="stop")
 @commands.has_permissions(administrator=True)
@@ -96,7 +96,7 @@ async def stop_luca(ctx):
     if ch_id in channel_states:
         channel_states[ch_id]["active"] = False
         channel_states[ch_id]["msg_count"] = 0
-    await ctx.reply("Luca has been deactivated for this channel. 💛")
+    await ctx.reply("I'm shutting down now. 🛑")
 
 @stop_luca.error
 async def stop_luca_error(ctx, error):
