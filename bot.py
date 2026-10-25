@@ -14,7 +14,7 @@ intents.message_content = True
 intents.members = True
 bot = commands.Bot(command_prefix="?", intents=intents)
 
-# Track active state and 20-second cooldown timers for server channels
+# Track active state and cooldown timers for server channels
 channel_states = {}
 
 # Setup database for persistent volume on Railway or local testing
@@ -116,20 +116,16 @@ async def continue_luca(ctx):
 
 @bot.event
 async def on_message(message):
-    # 1. Ignore ONLY Luca's own messages (allows Marvin and human chat)
     if message.author == bot.user:
         return
 
-    # 2. Silently ignore Marvin's or other prefix commands (!)
     if message.content.startswith("!"):
         return
 
-    # 3. Process Luca's own prefix commands (?)
     if message.content.startswith("?"):
         await bot.process_commands(message)
         return
 
-    # 3. Allow DMs, but restrict server messages to allowed channels & manage channel state
     if message.guild:
         if message.guild.id == MARVIN_SERVER_ID and message.channel.id not in MARVIN_ALLOWED_CHANNELS:
             return
@@ -142,7 +138,6 @@ async def on_message(message):
 
         state = channel_states[ch_id]
 
-        # 15-minute cooldown enforcement
         if now < state["cooldown_until"]:
             return
 
@@ -153,31 +148,26 @@ async def on_message(message):
             and getattr(message.reference.resolved, 'author', None) == bot.user
         )
 
-        # Wake up on ping or reply from a human or Marvin
         if is_pinged or is_reply:
             state["active"] = True
             state["msg_count"] = 0
 
-        # Wait for initial trigger
         if not state["active"]:
             return
 
         state["msg_count"] += 1
 
-        # Trigger 15-minute cooldown after 25 messages without pings/replies
         if state["msg_count"] > 25:
             state["active"] = False
             state["msg_count"] = 0
             state["cooldown_until"] = now + (15 * 60)
             return
 
-    # 4. Message Variables
     user_message = message.content
     user_id = str(message.author.id)
     username = message.author.name
     past_memory = get_user_memory(user_id)
 
-    is_dad = str(message.author) == "Zahamaru" or message.author.name == "Zahamaru"
     system_instruction = f"""
 You are Luca (14). You share a deep, protective bond with all your brothers across the 6 areas of the Sanctuary Garden (Zen Woods, Desert Oasis, Morning Sanctuary, Cloud Arena, Mystical Lake, and Logan's Security Station).
 You know Your Dad when he talks to you from his Discord account @Zahamaru.
@@ -232,7 +222,6 @@ Here is what you remember about the person you are currently talking to ({userna
 Keep your responses natural, conversational, and stay true to your calm, thoughtful nature.
 """
 
-    # Handle multimodal attachments (images/videos sent in Discord)
     contents = [user_message]
     if message.attachments:
         for attachment in message.attachments:
@@ -247,11 +236,10 @@ Keep your responses natural, conversational, and stay true to your calm, thought
 
     async with message.channel.typing():
         response = None
-        # Process Gemini response inside retry loop
         for attempt in range(3):
             try:
                 response = client.models.generate_content(
-                    model="gemini-2.5-flash",
+                    model="gemini-3.6-flash",
                     contents=contents,
                     config=genai.types.GenerateContentConfig(
                         system_instruction=(
@@ -276,21 +264,15 @@ Keep your responses natural, conversational, and stay true to your calm, thought
                 if attempt == 2:
                     response = None
 
-    # Reply to user and update SQLite memory
     if response and response.text:
         reply_text = response.text
-        # Split messages into chunks of 1900 chars to avoid Discord's 2000 character limit
         chunks = [reply_text[i:i + 1900] for i in range(0, len(reply_text), 1900)]
         for chunk in chunks:
             await message.reply(chunk)
         
-        # Save both what you said AND what Bubba replied
         full_turn = f"User ({username}): {user_message}\nLuca: {reply_text}"
-        
-        # Save to SQLite memory
         update_user_memory(str(user_id), username, full_turn)
 
 
-# Pull Discord Bot Token from Railway Environment Variable (supports both naming conventions)
 DISCORD_TOKEN = os.getenv("DISCORD_BOT_TOKEN") or os.getenv("DISCORD_TOKEN")
 bot.run(DISCORD_TOKEN)
