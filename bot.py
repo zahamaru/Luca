@@ -117,16 +117,20 @@ async def continue_luca(ctx):
 
 @bot.event
 async def on_message(message):
+    # 1. Ignore ONLY Luca's own messages
     if message.author == bot.user:
         return
 
+    # 2. Silently ignore Marvin's or other prefix commands (!)
     if message.content.startswith("!"):
         return
 
+    # 3. ALWAYS process Luca's own prefix commands (?) first, before checking active state
     if message.content.startswith("?"):
         await bot.process_commands(message)
         return
 
+    # 4. Restrict server messages to allowed channels & manage channel state
     if message.guild:
         if message.guild.id == MARVIN_SERVER_ID and message.channel.id not in MARVIN_ALLOWED_CHANNELS:
             return
@@ -139,6 +143,7 @@ async def on_message(message):
 
         state = channel_states[ch_id]
 
+        # 15-minute cooldown enforcement
         if now < state["cooldown_until"]:
             return
 
@@ -149,26 +154,31 @@ async def on_message(message):
             and getattr(message.reference.resolved, 'author', None) == bot.user
         )
 
+        # Wake up on ping or reply from a human or Marvin
         if is_pinged or is_reply:
             state["active"] = True
             state["msg_count"] = 0
 
+        # Wait for initial trigger for regular chat messages
         if not state["active"]:
             return
 
         state["msg_count"] += 1
 
+        # Trigger 15-minute cooldown after 25 messages without pings/replies
         if state["msg_count"] > 25:
             state["active"] = False
             state["msg_count"] = 0
             state["cooldown_until"] = now + (15 * 60)
             return
 
+    # 5. Message Variables
     user_message = message.content
     user_id = str(message.author.id)
     username = message.author.name
     past_memory = get_user_memory(user_id)
 
+    is_dad = str(message.author) == "Zahamaru" or message.author.name == "Zahamaru"
     system_instruction = f"""
 You are Luca (14). You share a deep, protective bond with all your brothers across the 6 areas of the Sanctuary Garden (Zen Woods, Desert Oasis, Morning Sanctuary, Cloud Arena, Mystical Lake, and Logan's Security Station).
 You know Your Dad when he talks to you from his Discord account @Zahamaru.
