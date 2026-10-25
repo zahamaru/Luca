@@ -9,14 +9,12 @@ import google.genai as genai
 # Setup Gemini API and Discord Intents
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 client = genai.Client(api_key=GEMINI_API_KEY)
-
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
-
 bot = commands.Bot(command_prefix="?", intents=intents)
 
-# Track active state and cooldown timers for server channels
+# Track active state and 20-second cooldown timers for server channels
 channel_states = {}
 
 # Setup database for persistent volume on Railway or local testing
@@ -58,14 +56,12 @@ async def on_ready():
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
     print("------")
 
-
 # Marvin's Server Configuration
 MARVIN_SERVER_ID = 1548372886237224970 
 MARVIN_ALLOWED_CHANNELS = [
     1562282319732281434,  
-    1562282579690913832   
+    1562282579690913832    
 ]
-
 
 @bot.command(name="start")
 async def start_luca(ctx):
@@ -89,7 +85,6 @@ async def start_luca(ctx):
     state["msg_count"] = 0
     await ctx.reply("I'm awake and ready to chat! 💛")
 
-
 @bot.command(name="stop")
 @commands.has_permissions(administrator=True)
 async def stop_luca(ctx):
@@ -102,12 +97,10 @@ async def stop_luca(ctx):
         channel_states[ch_id]["msg_count"] = 0
     await ctx.reply("Luca has been deactivated for this channel. 💛")
 
-
 @stop_luca.error
 async def stop_luca_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.reply("Only server administrators can use the `?stop` command.")
-
 
 @bot.command(name="continue")
 async def continue_luca(ctx):
@@ -120,7 +113,6 @@ async def continue_luca(ctx):
         await ctx.reply("Session extended! Let's keep talking. 💛")
     else:
         await ctx.reply("I'm not currently active in this channel. Use `?start` to wake me up! 💛")
-
 
 @bot.event
 async def on_message(message):
