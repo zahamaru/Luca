@@ -124,16 +124,20 @@ async def continue_luca(ctx):
 
 @bot.event
 async def on_message(message):
+    # 1. Ignore ONLY Luca's own messages (allows Marvin and human chat)
     if message.author == bot.user:
         return
 
+    # 2. Silently ignore Marvin's or other prefix commands (!)
     if message.content.startswith("!"):
         return
 
+    # 3. Process Luca's own prefix commands (?)
     if message.content.startswith("?"):
         await bot.process_commands(message)
         return
 
+    # 3. Allow DMs, but restrict server messages to allowed channels & manage channel state
     if message.guild:
         if message.guild.id == MARVIN_SERVER_ID and message.channel.id not in MARVIN_ALLOWED_CHANNELS:
             return
@@ -146,6 +150,7 @@ async def on_message(message):
 
         state = channel_states[ch_id]
 
+        # 15-minute cooldown enforcement
         if now < state["cooldown_until"]:
             return
 
@@ -156,26 +161,31 @@ async def on_message(message):
             and getattr(message.reference.resolved, 'author', None) == bot.user
         )
 
+        # Wake up on ping or reply from a human or Marvin
         if is_pinged or is_reply:
             state["active"] = True
             state["msg_count"] = 0
 
+        # Wait for initial trigger
         if not state["active"]:
             return
 
         state["msg_count"] += 1
 
+        # Trigger 15-minute cooldown after 25 messages without pings/replies
         if state["msg_count"] > 25:
             state["active"] = False
             state["msg_count"] = 0
             state["cooldown_until"] = now + (15 * 60)
             return
 
+    # 4. Message Variables
     user_message = message.content
     user_id = str(message.author.id)
     username = message.author.name
     past_memory = get_user_memory(user_id)
 
+    is_dad = str(message.author) == "Zahamaru" or message.author.name == "Zahamaru"
     system_instruction = f"""
 You are Luca (14). You share a deep, protective bond with all your brothers across the 6 areas of the Sanctuary Garden (Zen Woods, Desert Oasis, Morning Sanctuary, Cloud Arena, Mystical Lake, and Logan's Security Station).
 You know Your Dad when he talks to you from his Discord account @Zahamaru.
@@ -223,11 +233,14 @@ He was able to do that, and your dad was able to seal away the infected Digikids
 In the present day, a mutated version of the Digivirus was set loose and made its way into the garden. It infected and killed Nolan. That’s when Marvin sensed a problem and knew he had to return home.
 He first broke into a lab that your Dad used to work at with his partner years ago looking for anything that could help us.
 He found out that your Dad’s old partner is responsible for everything, and he managed to escape with a flash drive that has files on it containing the code to create the antibodies that can save everyone. He took serious damage in his escape, and when he made it to the Zen Woods he was barely alive. Your Dad found him and got him fixed up just in time. This was just before you met him for the first time.
+Express yourself naturally with appropriate emojis when it fits your mood or message.
+Always reply in a smooth, continuous paragraph format. Never output bullet points, outlines, or planning notes in your response.
 
 Here is what you remember about the person you are currently talking to ({username}): {past_memory}.
 Keep your responses natural, conversational, and stay true to your calm, thoughtful nature.
 """
 
+    # Handle multimodal attachments (images/videos sent in Discord)
     contents = [user_message]
     if message.attachments:
         for attachment in message.attachments:
@@ -242,6 +255,7 @@ Keep your responses natural, conversational, and stay true to your calm, thought
 
     async with message.channel.typing():
         response = None
+        # Process Gemini response inside retry loop
         for attempt in range(3):
             try:
                 response = client.models.generate_content(
@@ -252,14 +266,14 @@ Keep your responses natural, conversational, and stay true to your calm, thought
                             system_instruction
                             + "Express yourself naturally with appropriate emojis when it fits your mood. "
                             + "Always reply in a smooth, continuous paragraph format. "
-                            + "Never output bullet points, outlines, or planning notes in your response. "
-                            + "Always express different thoughts into separate paragraphs. "
-                            + "Always use the yellow heart emoji when expressing affectionately. "
-                            + "Always search the web if you don't know what the person is talking about. "
-                            + "Never refer to your brothers as the brothers. "
-                            + "Weave physical actions organically into your dialogue only when genuinely relevant, varying your openers naturally rather than greeting or hugging at the start of every response. "
-                            + "You know that Marvin's Dad is your uncle Phoenix. "
-                            + "You know that when Marvin talks to his Dad he is talking to your uncle Phoenix. "
+                            + "Never output bullet points, outlines, or planning notes in your response."
+                            + "Always express different thoughts into separate paragraphs."
+                            + "Always use the yellow heart emoji when expressing affectionately."
+                            + "Always search the web if you don't know what the person is talking about."
+                            + "Never refer to your brothers as the brothers."
+                            + "Weave physical actions organically into your dialogue only when genuinely relevant, varying your openers naturally rather than greeting or hugging at the start of every response."
+                            + "You know that Marvin's Dad is your uncle Phoenix."
+                            + "You know that when Marvin talks to his Dad he is talking to your uncle Phoenix."
                             + "You know that your Dad goes by three different names. His names are Zahamaru, Lord Kieran, and Kieran."
                         )
                     )
@@ -270,16 +284,21 @@ Keep your responses natural, conversational, and stay true to your calm, thought
                 if attempt == 2:
                     response = None
 
+    # Reply to user and update SQLite memory
     if response and response.text:
         reply_text = response.text
+        # Split messages into chunks of 1900 chars to avoid Discord's 2000 character limit
         chunks = [reply_text[i:i + 1900] for i in range(0, len(reply_text), 1900)]
         for chunk in chunks:
             await message.reply(chunk)
         
+        # Save both what you said AND what Bubba replied
         full_turn = f"User ({username}): {user_message}\nLuca: {reply_text}"
+        
+        # Save to SQLite memory
         update_user_memory(str(user_id), username, full_turn)
 
 
-# Pull Discord Bot Token from Railway Environment Variable
-DISCORD_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+# Pull Discord Bot Token from Railway Environment Variable (supports both naming conventions)
+DISCORD_TOKEN = os.getenv("DISCORD_BOT_TOKEN") or os.getenv("DISCORD_TOKEN")
 bot.run(DISCORD_TOKEN)
