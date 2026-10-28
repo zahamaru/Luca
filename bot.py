@@ -30,12 +30,10 @@ CREATE TABLE IF NOT EXISTS user_memory (
 """)
 db.commit()
 
-
 def get_user_memory(user_id):
     cursor.execute("SELECT memory FROM user_memory WHERE user_id = ?", (str(user_id),))
     row = cursor.fetchone()
     return row[0] if row else "No previous memories recorded."
-
 
 def update_user_memory(user_id, username, new_fact):
     existing = get_user_memory(user_id)
@@ -50,6 +48,9 @@ def update_user_memory(user_id, username, new_fact):
     """, (str(user_id), username, updated, updated))
     db.commit()
 
+async def generate_luca_response(prompt, history=None):
+    # Pass prompt and history to model generation logic
+    pass
 
 @bot.event
 async def on_ready():
@@ -57,35 +58,28 @@ async def on_ready():
     print("------")
 
 # Marvin's Server Configuration
-MARVIN_SERVER_ID = 1548372886237224970 
+MARVIN_SERVER_ID = 1548372886237224970
 MARVIN_ALLOWED_CHANNELS = [
     1562282319732281434,  
     1562282579690913832,
     1549253946978209872    
 ]
 
-@bot.command(name="start")
-async def start_luca(ctx):
+# Channel state tracker to manage active status and cooldowns
+channel_states = {}
+
+@bot.command(name="continue")
+async def continue_luca(ctx):
     if ctx.guild and ctx.guild.id == MARVIN_SERVER_ID and ctx.channel.id not in MARVIN_ALLOWED_CHANNELS:
         return
-
-    ch_id = ctx.channel.id
-    now = time.time()
     
+    ch_id = ctx.channel.id
     if ch_id not in channel_states:
-        channel_states[ch_id] = {"active": False, "msg_count": 0, "cooldown_until": 0}
-
-    state = channel_states[ch_id]
-
-    if now < state["cooldown_until"]:
-        remaining = int(state["cooldown_until"] - now)
-        await ctx.reply(f"I'm on a brief cooldown right now. Please wait {remaining} seconds! 😅")
-        return
-
-    state["active"] = True
-    state["msg_count"] = 0
-    await ctx.reply("I'm awake and ready to talk! 💛")
-
+        channel_states[ch_id] = {"active": True, "msg_count": 0, "cooldown_until": 0}
+    else:
+        channel_states[ch_id]["active"] = True
+    
+    await ctx.reply("I'm active and listening again! ⚡")
 @bot.command(name="stop")
 @commands.has_permissions(administrator=True)
 async def stop_luca(ctx):
@@ -95,9 +89,41 @@ async def stop_luca(ctx):
     ch_id = ctx.channel.id
     if ch_id in channel_states:
         channel_states[ch_id]["active"] = False
-        channel_states[ch_id]["msg_count"] = 0
-    await ctx.reply("I'm shutting down now. 🛑")
 
+    await ctx.reply("Taking a break for now. Ping me or use ?continue when you need me! 💤")
+
+@stop_luca.error
+async def stop_luca_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.reply("Only server administrators can use the `?stop` command.")
+
+@bot.event
+async def on_message(message):
+    if message.author == bot.user:
+        return
+
+    # Check allowed channels for Marvin's server
+    if message.guild and message.guild.id == MARVIN_SERVER_ID and message.channel.id not in MARVIN_ALLOWED_CHANNELS:
+        return
+
+    ch_id = message.channel.id
+    if ch_id not in channel_states:
+        channel_states[ch_id] = {"active": True, "msg_count": 0, "cooldown_until": 0}
+
+    state = channel_states[ch_id]
+
+    # Process commands first (handles ?continue and ?stop)
+    await bot.process_commands(message)
+
+    # Respond if Luca is tagged/mentioned AND the channel state is active
+    if bot.user in message.mentions and state["active"]:
+        async with message.channel.typing():
+            # Fetch recent channel history capped at 10 messages
+            raw_history = [msg async for msg in message.channel.history(limit=10)]
+            raw_history.reverse()
+
+            response = await generate_luca_response(message.content, history=raw_history)
+            await message.channel.send(response)
 @stop_luca.error
 async def stop_luca_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
@@ -113,7 +139,8 @@ async def continue_luca(ctx):
         channel_states[ch_id]["msg_count"] = 0
         await ctx.reply("Session extended! Let's keep talking. 💛")
     else:
-        await ctx.reply("I'm not currently active in this channel. Use `?start` to wake me up! 💛")
+        channel_states[ch_id] = {"active": True, "msg_count": 0, "cooldown_until": 0}
+        await ctx.reply("I'm active and listening again! ⚡")
 
 @bot.event
 async def on_message(message):
@@ -122,15 +149,15 @@ async def on_message(message):
         return
 
     # 2. Global server channel restriction check
-    if message.guild and message.guild.id == MARVIN_SERVER_ID:
-        if message.channel.id not in MARVIN_ALLOWED_CHANNELS:
-            return
+# 2. Global server channel restriction check
+    if message.guild and message.guild.id == MARVIN_SERVER_ID and message.channel.id not in MARVIN_ALLOWED_CHANNELS:
+        return
 
     # 3. Silently ignore Marvin's or other prefix commands (!)
     if message.content.startswith("!"):
         return
 
-    # 4. Process Luca's own prefix commands (?)
+ # 4. Process Luca's own prefix commands (?)
     if message.content.startswith("?"):
         await bot.process_commands(message)
         return
