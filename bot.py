@@ -68,18 +68,6 @@ MARVIN_ALLOWED_CHANNELS = [
 # Channel state tracker to manage active status and cooldowns
 channel_states = {}
 
-@bot.command(name="continue")
-async def continue_luca(ctx):
-    if ctx.guild and ctx.guild.id == MARVIN_SERVER_ID and ctx.channel.id not in MARVIN_ALLOWED_CHANNELS:
-        return
-    
-    ch_id = ctx.channel.id
-    if ch_id not in channel_states:
-        channel_states[ch_id] = {"active": True, "msg_count": 0, "cooldown_until": 0}
-    else:
-        channel_states[ch_id]["active"] = True
-    
-    await ctx.reply("I'm active and listening again! ⚡")
 @bot.command(name="stop")
 @commands.has_permissions(administrator=True)
 async def stop_luca(ctx):
