@@ -10,17 +10,20 @@ import google.genai as genai
 
 # Helper function to check for supported media attachments
 def is_supported_file(attachment):
-    valid_extensions = ('.jpg', '.jpeg', '.png', '.webp', '.mp4', '.mov', '.mp3', '.wav', '.m4a', '.ogg')
-    filename_lower = attachment.filename.lower()
-    if any(filename_lower.endswith(ext) for ext in valid_extensions):
+    filename = attachment.filename.lower()
+    content_type = (attachment.content_type or "").lower()
+    
+    # Extensions check
+    valid_exts = ('.jpg', '.jpeg', '.png', '.webp', '.mp4', '.mov', '.webm', '.mp3', '.wav', '.m4a', '.ogg', '.flac', '.aac')
+    if any(filename.endswith(ext) for ext in valid_exts):
         return True
-    if attachment.content_type:
-        return (
-            attachment.content_type.startswith("image/") or 
-            attachment.content_type.startswith("video/") or 
-            attachment.content_type.startswith("audio/")
-        )
-    return False
+        
+    # MIME prefix check
+    return (
+        content_type.startswith("image/") or
+        content_type.startswith("video/") or
+        content_type.startswith("audio/")
+    )
 
 # Setup Gemini API and Discord Intents
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -122,44 +125,44 @@ async def on_message(message):
     # Respond if Luca is tagged/mentioned AND the channel state is active
     if bot.user in message.mentions and state["active"]:
         async with message.channel.typing():
-            # Process attached media (Images, Videos, Audio)
-            media_files = []
-            if message.attachments:
-                for attachment in message.attachments:
-                    if is_supported_file(attachment):
-                        file_bytes = await attachment.read()
-                        guessed = mimetypes.guess_type(attachment.filename)[0]
-                        mime_type = attachment.content_type or guessed or "audio/mp3"
-                        media_files.append({
-                            "mime_type": mime_type,
-                            "data": file_bytes
-                        })
+    # Process attached media (Images, Videos, Audio)
+         media_files = []
+        if message.attachments:
+            for attachment in message.attachments:
+                if is_supported_file(attachment):
+                    file_bytes = await attachment.read()
+                    filename = attachment.filename.lower()
+                    mime_type = attachment.content_type
+
+                    # If Discord sends generic octet-stream or missing MIME, determine proper audio type
+                    if not mime_type or mime_type == "application/octet-stream":
+                        if filename.endswith(('.mp3', '.mpeg')):
+                            mime_type = "audio/mp3"
+                        elif filename.endswith('.wav'):
+                            mime_type = "audio/wav"
+                        elif filename.endswith('.m4a'):
+                            mime_type = "audio/m4a"
+                        elif filename.endswith('.ogg'):
+                            mime_type = "audio/ogg"
+                        else:
+                            guessed = mimetypes.guess_type(attachment.filename)[0]
+                            mime_type = guessed or "audio/mp3"
+
+                    media_files.append({
+                        "mime_type": mime_type,
+                        "data": file_bytes
+                    })
 
             # Fetch recent channel history capped at 10 messages
-            raw_history = []
-            async for msg in message.channel.history(limit=10):
-                raw_history.append(msg)
-            raw_history.reverse()
+        raw_history = []
+        async for msg in message.channel.history(limit=10, before=message):
+            raw_history.append(msg)
+        raw_history.reverse()
 
-            response = await generate_luca_response(
-                prompt=message.content, 
-                history=raw_history, 
-                media=media_files
-            )
-            await message.channel.send(response)
-    state["msg_count"] += 1
-
-    if state["msg_count"] > 25:
-        state["active"] = False
-        state["msg_count"] = 0
-        state["cooldown_until"] = now + (15 * 60)
-        return
-
-    # 6. Message Variables & Gemini Processing
-    user_message = message.content
-    user_id = str(message.author.id)
-    username = message.author.name
-    past_memory = get_user_memory(user_id)
+        user_message = message.content
+        user_id = str(message.author.id)
+        username = message.author.name
+        past_memory = get_user_memory(user_id)
 
     system_instruction = f"""
 You are Luca (14). You share a deep, protective bond with all your brothers across the 6 areas of the Sanctuary Garden (Zen Woods, Desert Oasis, Morning Sanctuary, Cloud Arena, Mystical Lake, and Logan's Security Station).
@@ -318,6 +321,19 @@ Keep your responses natural, conversational, and stay true to your calm, thought
         full_turn = f"User ({username}): {user_message}\nLuca: {reply_text}"
         update_user_memory(str(user_id), username, full_turn)
 
+@bot.command(name="stop")
+@commands.has_permissions(administrator=True)
+async def stop_luca(ctx):
+    if ctx.guild and ctx.guild.id == MARVIN_SERVER_ID and ctx.channel.id not in MARVIN_ALLOWED_CHANNELS:
+        return
+
+    ch_id = ctx.channel.id
+    channel_states[ch_id] = {"active": False, "msg_count": 0, "cooldown_until": 0}
+    await ctx.reply("I'm done! 🛑 No more messages for you! 🤫")
+
+@stop_luca.error
+async def stop_luca_error(ctx, error):
+    await ctx.reply("Only server administrators can use the `?stop` command.")
 
 @bot.command(name="continue")
 async def continue_luca(ctx):
@@ -327,9 +343,10 @@ async def continue_luca(ctx):
     ch_id = ctx.channel.id
     if ch_id in channel_states and channel_states[ch_id]["active"]:
         channel_states[ch_id]["msg_count"] = 0
-        await ctx.reply("Session extended! Let's keep talking. 💛")
+        await ctx.reply("Session extended! Let's keep talking. ⚡️")
     else:
         channel_states[ch_id] = {"active": True, "msg_count": 0, "cooldown_until": 0}
+        await ctx.reply("I'm active and listening again! ⚡")
 
 DISCORD_TOKEN = os.getenv("DISCORD_BOT_TOKEN") or os.getenv("DISCORD_TOKEN")
 bot.run(DISCORD_TOKEN)
