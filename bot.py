@@ -87,23 +87,6 @@ MARVIN_ALLOWED_CHANNELS = [
 # Channel state tracker to manage active status and cooldowns
 channel_states = {}
 
-@bot.command(name="stop")
-@commands.has_permissions(administrator=True)
-async def stop_luca(ctx):
-    if ctx.guild and ctx.guild.id == MARVIN_SERVER_ID and ctx.channel.id not in MARVIN_ALLOWED_CHANNELS:
-        return
-
-    ch_id = ctx.channel.id
-    if ch_id in channel_states:
-        channel_states[ch_id]["active"] = False
-
-    await ctx.reply("Taking a break for now. Ping me or use ?continue when you need me! 💤")
-
-@stop_luca.error
-async def stop_luca_error(ctx, error):
-    if isinstance(error, commands.MissingPermissions):
-        await ctx.reply("Only server administrators can use the `?stop` command.")
-
 @bot.event
 async def on_message(message):
     if message.author == bot.user:
@@ -302,7 +285,8 @@ Keep your responses natural, conversational, and stay true to your calm, thought
                             + "You know that Marvin's Dad is your uncle Phoenix."
                             + "You know that when Marvin talks to his Dad he is talking to your uncle Phoenix."
                             + "You know that your Dad goes by three different names. His names are Zahamaru, Lord Kieran, and Kieran."
-                            +"You know that the garden's security system AI is called Kai."
+                            + "You know that the garden's security system AI is called Kai."
+                            + "You know that your step brothers Atlas and Deacon don't live with you."
                         )
                     )
                 )
