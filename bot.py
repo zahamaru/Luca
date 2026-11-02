@@ -96,14 +96,6 @@ async def on_message(message):
     if message.guild and message.guild.id == MARVIN_SERVER_ID and message.channel.id not in MARVIN_ALLOWED_CHANNELS:
         return
 
-    async def on_message(message):
-        if message.author == bot.user:
-            return
-
-    # Check allowed channels for Marvin's server
-    if message.guild and message.guild.id == MARVIN_SERVER_ID and message.channel.id not in MARVIN_ALLOWED_CHANNELS:
-        return
-
     ch_id = message.channel.id
     if ch_id not in channel_states:
         channel_states[ch_id] = {"active": True, "msg_count": 0, "cooldown_until": 0}
@@ -111,7 +103,9 @@ async def on_message(message):
     state = channel_states[ch_id]
 
     # Process commands first (handles ?continue and ?stop)
-    await bot.process_commands(message)
+    if message.content.startswith("?"):
+        await bot.process_commands(message)
+        return
 
     # Check DM, mention, and active state conditions
     is_dm = isinstance(message.channel, discord.DMChannel)
