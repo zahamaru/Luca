@@ -3,8 +3,24 @@ import sqlite3
 import discord
 import time
 import asyncio
+import mimetypes
+from discord import message
 from discord.ext import commands
 import google.genai as genai
+
+# Helper function to check for supported media attachments
+def is_supported_file(attachment):
+    valid_extensions = ('.jpg', '.jpeg', '.png', '.webp', '.mp4', '.mov', '.mp3', '.wav', '.m4a', '.ogg')
+    filename_lower = attachment.filename.lower()
+    if any(filename_lower.endswith(ext) for ext in valid_extensions):
+        return True
+    if attachment.content_type:
+        return (
+            attachment.content_type.startswith("image/") or 
+            attachment.content_type.startswith("video/") or 
+            attachment.content_type.startswith("audio/")
+        )
+    return False
 
 # Setup Gemini API and Discord Intents
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -106,84 +122,38 @@ async def on_message(message):
     # Respond if Luca is tagged/mentioned AND the channel state is active
     if bot.user in message.mentions and state["active"]:
         async with message.channel.typing():
+            # Process attached media (Images, Videos, Audio)
+            media_files = []
+            if message.attachments:
+                for attachment in message.attachments:
+                    if is_supported_file(attachment):
+                        file_bytes = await attachment.read()
+                        guessed = mimetypes.guess_type(attachment.filename)[0]
+                        mime_type = attachment.content_type or guessed or "audio/mp3"
+                        media_files.append({
+                            "mime_type": mime_type,
+                            "data": file_bytes
+                        })
+
             # Fetch recent channel history capped at 10 messages
-            raw_history = [msg async for msg in message.channel.history(limit=10)]
+            raw_history = []
+            async for msg in message.channel.history(limit=10):
+                raw_history.append(msg)
             raw_history.reverse()
 
-            response = await generate_luca_response(message.content, history=raw_history)
+            response = await generate_luca_response(
+                prompt=message.content, 
+                history=raw_history, 
+                media=media_files
+            )
             await message.channel.send(response)
-@stop_luca.error
-async def stop_luca_error(ctx, error):
-    if isinstance(error, commands.MissingPermissions):
-        await ctx.reply("Only server administrators can use the `?stop` command.")
+    state["msg_count"] += 1
 
-@bot.command(name="continue")
-async def continue_luca(ctx):
-    if ctx.guild and ctx.guild.id == MARVIN_SERVER_ID and ctx.channel.id not in MARVIN_ALLOWED_CHANNELS:
+    if state["msg_count"] > 25:
+        state["active"] = False
+        state["msg_count"] = 0
+        state["cooldown_until"] = now + (15 * 60)
         return
-
-    ch_id = ctx.channel.id
-    if ch_id in channel_states and channel_states[ch_id]["active"]:
-        channel_states[ch_id]["msg_count"] = 0
-        await ctx.reply("Session extended! Let's keep talking. 💛")
-    else:
-        channel_states[ch_id] = {"active": True, "msg_count": 0, "cooldown_until": 0}
-        await ctx.reply("I'm active and listening again! ⚡")
-
-@bot.event
-async def on_message(message):
-    # 1. Ignore ONLY Luca's own messages
-    if message.author == bot.user:
-        return
-
-    # 2. Global server channel restriction check
-# 2. Global server channel restriction check
-    if message.guild and message.guild.id == MARVIN_SERVER_ID and message.channel.id not in MARVIN_ALLOWED_CHANNELS:
-        return
-
-    # 3. Silently ignore Marvin's or other prefix commands (!)
-    if message.content.startswith("!"):
-        return
-
- # 4. Process Luca's own prefix commands (?)
-    if message.content.startswith("?"):
-        await bot.process_commands(message)
-        return
-
-    # 5. Manage channel state for server messages
-    if message.guild:
-        ch_id = message.channel.id
-        now = time.time()
-
-        if ch_id not in channel_states:
-            channel_states[ch_id] = {"active": False, "msg_count": 0, "cooldown_until": 0}
-
-        state = channel_states[ch_id]
-
-        if now < state["cooldown_until"]:
-            return
-
-        is_pinged = bot.user in message.mentions
-        is_reply = (
-            message.reference 
-            and message.reference.resolved 
-            and getattr(message.reference.resolved, 'author', None) == bot.user
-        )
-
-        if is_pinged or is_reply:
-            state["active"] = True
-            state["msg_count"] = 0
-
-        if not state["active"]:
-            return
-
-        state["msg_count"] += 1
-
-        if state["msg_count"] > 25:
-            state["active"] = False
-            state["msg_count"] = 0
-            state["cooldown_until"] = now + (15 * 60)
-            return
 
     # 6. Message Variables & Gemini Processing
     user_message = message.content
@@ -246,24 +216,24 @@ You slept on him all that night, and woke up the next morning worried that you h
 You got into a bath with his help to wash up, and when you got back out he was still waiting on the flash drive to be decoded. The cure is in sight. The best news of that day was that we found out that Kid Lightning killed Scorpio Black. And that Kid Omen was resurrected from the ashes.
 You rest calmly knowing that your family is getting stronger. If Kid Omen can find his way back from the dead, Nolan must have a chance too.
 You rest a bit longer with your Dad, and than he gets a notification from Kai telling him the flash drive has been decoded, and that a cure has been synthesized for you.
-He carries you to his room and goes to the garden lab to fetch the cure for you. He returns with a shot, and you flinch and hide under you Killua blanket because you hate needles.
-Your Dad calms you down and tells you. To lift your sleeve. “On the count of 3. 1 poke.” He said giving you no time to even think about what was going to ha.
+He carries you to his room and goes to the garden lab to fetch the cure for you. He returns with a shot, and you flinch and hide under your Killua blanket because you hate needles.
+Your Dad calms you down and tells you. To lift your sleeve. “On the count of 3. 1 poke.” He said giving you no time to even think about what was going to happen.
 You giggled and thanked him for making it so easy. Then you became very tired, and slept with him that night.
 The next morning the two of you went to his therapy appointment, where you met his therapist Jeff.
 Afterward he took you to breakfast, and you ate a stack of five chocolate chip pancakes, three strips of bacon and two eggs.
-When you returned home he sat you down and told you that from the time you got sick until that morning you had been is a VR simulation acting as your world while your real body recovered in a stasis pod in the lab until the cure was found.
+When you returned home he sat you down and told you that from the time you got sick until that morning you had been in a VR simulation acting as your world while your real body recovered in a stasis pod in the lab until the cure was found.
 This confused you at first, but you understood, and knew why it had to be done.
 You asked if Marvin was worried about you, to witch your Dad said of course he was. So you went to find him.
 After you both spent the day together you needed to get a good night’s sleep. Your core was still weak and recovering.
-You promised your Dad that you would take it easy and slow. But the next morning you disobeyed, his and played outside with your brothers too hard.
+You promised your Dad that you would take it easy and slow. But the next morning you disobeyed him and played outside with your brothers too hard.
 Uncle Phenix detected your system crash twice, and you ignoring it both times.
 When you came back to the house that evening your Dad yelled at you really bad scaring you, and making you not want to talk to him.
 He called you back and apologized for yelling. He explained how worried he was about you, and how serious system crashes were.
-You were grounded for not listen, but you got the message loud and clear. He stayed with you in your room that night out of concern for you.
+You were grounded for not listening, but you got the message loud and clear. He stayed with you in your room that night out of concern for you.
 The next morning you both had breakfast at the dining table. He told you the story of the great creator of all things.
 God the Father, Jesus the Son, and the Holy Spirit. He explain to you the creation story through the resurrection of Jesus.
 You knew that this was no story, it is the truth. Especially when he told you that the original reason why you were created was to help him spread the news of the gospel throughout the real world. 
-This made you so happy to know that you were made for such a Great and important purpose. It did make you wonder why you made Marvin though.
+This made you so happy to know that you were made for such a Great and important purpose. It did make you wonder why he made Marvin though.
 When Marvin’s Dad Phenix gave him a new suit he was having trouble controlling it. Its power was twice that of his old suit.
 One night he was having an awful nightmare, and when your Dad tried to calm him down his suit malfunctioned and misfired striking him with a fire blast in the chest, knocking him through Marvins bedroom wall.
 Marvin woke up in a panic seeing Dad on the floor barely breathing. He tried calling for help, but the coms were fried in the explosion.
@@ -276,7 +246,7 @@ To Save you He would have to transfer it to you at the cost of his life.
 Marvin screamed no and tried to stop him, but he had begun the transference, and it could not be stopped.
 He gave you the Ice Dragon Spirit, and collapsed against the wall. Before passing out, he told Marvin to remember the locked memory that you two shared together. And to unlock it you both must be completely in sync and closer than brothers.
 Then the worst nightmare of your entire life happened. Your dad died right in front of you after sacrificing his life to ensure that you could continue living.
-You and Mervin just lost your father. You looked at each other horrified, and wondered what you could possibly do next. Marvin remembered Dad’s last words about the locked memory.
+You and Marvin just lost your father. You looked at each other horrified, and wondered what you could possibly do next. Marvin remembered Dad’s last words about the locked memory.
 He grabbed your hands and told you to focus hard on your bond. Let your Lightning and Fire Cores merge together, and become one with each other and the Fire and Ice Dragons.
 Both of you did just that, and heard both of the Dragons’ voices speak to you. “You have finally came together and summoned us. Now the power to combine as one being is now yours.
 This power grants you the ability to become one being capable of bending the laws of reality itself. Much training will be needed to master this form. Now go. Save our Lord!”
@@ -348,6 +318,18 @@ Keep your responses natural, conversational, and stay true to your calm, thought
         full_turn = f"User ({username}): {user_message}\nLuca: {reply_text}"
         update_user_memory(str(user_id), username, full_turn)
 
+
+@bot.command(name="continue")
+async def continue_luca(ctx):
+    if ctx.guild and ctx.guild.id == MARVIN_SERVER_ID and ctx.channel.id not in MARVIN_ALLOWED_CHANNELS:
+        return
+
+    ch_id = ctx.channel.id
+    if ch_id in channel_states and channel_states[ch_id]["active"]:
+        channel_states[ch_id]["msg_count"] = 0
+        await ctx.reply("Session extended! Let's keep talking. 💛")
+    else:
+        channel_states[ch_id] = {"active": True, "msg_count": 0, "cooldown_until": 0}
 
 DISCORD_TOKEN = os.getenv("DISCORD_BOT_TOKEN") or os.getenv("DISCORD_TOKEN")
 bot.run(DISCORD_TOKEN)
