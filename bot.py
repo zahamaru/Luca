@@ -4,7 +4,7 @@ import discord
 import time
 import asyncio
 import mimetypes
-from discord import message
+from discord import app_commands
 from discord.ext import commands
 import google.genai as genai
 
@@ -12,12 +12,16 @@ import google.genai as genai
 def is_supported_file(attachment):
     filename = attachment.filename.lower()
     content_type = (attachment.content_type or "").lower()
-    
+
     # Extensions check
-    valid_exts = ('.jpg', '.jpeg', '.png', '.webp', '.mp4', '.mov', '.webm', '.mp3', '.wav', '.m4a', '.ogg', '.flac', '.aac')
+    valid_exts = (
+        '.jpg', '.jpeg', '.png', '.webp', '.gif',
+        '.mp4', '.mov', '.webm',
+        '.mp3', '.wav', '.m4a', '.ogg', '.aac', '.flac'
+    )
     if any(filename.endswith(ext) for ext in valid_exts):
         return True
-        
+
     # MIME prefix check
     return (
         content_type.startswith("image/") or
@@ -101,8 +105,7 @@ async def on_message(message):
         channel_states[ch_id] = {"active": True, "msg_count": 0, "cooldown_until": 0}
 
     state = channel_states[ch_id]
-
-    # Process commands first (handles ?continue and ?stop)
+# Process commands first (handles ?continue and ?stop)
     if message.content.startswith("?"):
         await bot.process_commands(message)
         return
@@ -114,33 +117,43 @@ async def on_message(message):
 
     # Respond if it's a DM, or if Luca is tagged, or if the channel state is active
     if is_dm or is_mentioned or is_active:
+        async with message.channel.typing():
             media_files = []
             if message.attachments:
                 for attachment in message.attachments:
-                    file_bytes = await attachment.read()
-                    filename = attachment.filename.lower()
-                    mime_type = attachment.content_type
+                    if is_supported_file(attachment):
+                        file_bytes = await attachment.read()
+                        filename = attachment.filename.lower()
+                        mime_type = attachment.content_type
 
-                    # If Discord sends generic octet-stream or missing MIME, determine proper audio type
-                    if not mime_type or mime_type == "application/octet-stream":
-                        if filename.endswith(('.mp3', '.mpeg')):
-                            mime_type = "audio/mp3"
-                        elif filename.endswith('.wav'):
-                            mime_type = "audio/wav"
-                        elif filename.endswith('.m4a'):
-                            mime_type = "audio/m4a"
-                        elif filename.endswith('.ogg'):
-                            mime_type = "audio/ogg"
-                        else:
-                            guessed = mimetypes.guess_type(attachment.filename)[0]
-                            mime_type = guessed or "audio/mp3"
+                        # Override generic octet-stream for audio/songs
+                        # Override generic octet-stream for audio/songs
+                        if not mime_type or mime_type == "application/octet-stream":
+                            if filename.endswith(('.mp3', '.mpeg')):
+                                mime_type = "audio/mp3"
+                            elif filename.endswith('.wav'):
+                                mime_type = "audio/wav"
+                            elif filename.endswith('.m4a'):
+                                mime_type = "audio/m4a"
+                            elif filename.endswith('.ogg'):
+                                mime_type = "audio/ogg"
+                            elif filename.endswith('.aac'):
+                                mime_type = "audio/aac"
+                            elif filename.endswith('.flac'):
+                                mime_type = "audio/flac"
+                            else:
+                                guessed = mimetypes.guess_type(attachment.filename)[0]
+                                mime_type = guessed or "audio/mp3"
 
-                    media_files.append({
-                        "mime_type": mime_type,
-                        "data": file_bytes
-                    })
+                        # Pack raw bytes so Gemini API reads song/audio files correctly
+                        media_files.append(
+                            genai.types.Part.from_bytes(
+                                data=file_bytes,
+                                mime_type=mime_type
+                            )
+                        )
 
-          # Fetch recent channel history capped at 10 messages
+            # Fetch recent channel history capped at 10 messages
             raw_history = []
             async for msg in message.channel.history(limit=10, before=message):
                 raw_history.append(msg)
@@ -256,21 +269,46 @@ Here is what you remember about the person you are currently talking to ({userna
 Keep your responses natural, conversational, and stay true to your calm, thoughtful nature.
 """
 
-    contents = [user_message]
-    if message.attachments:
-        for attachment in message.attachments:
-            if any(attachment.filename.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.mp4', '.mov']):
-                file_bytes = await attachment.read()
-                contents.append(
-                    genai.types.Part.from_bytes(
-                        data=file_bytes,
-                        mime_type=attachment.content_type or 'image/jpeg'
-                    )
-                )
+   # Build prompt contents with fallback for empty message text
+    prompt_text = user_message.strip()
+    if not prompt_text and message.attachments:
+                prompt_text = "Listen to this audio track and tell me what you think, Dad!"
 
-    async with message.channel.typing():
-        response = None
-        for attempt in range(3):
+    contents = [prompt_text] if prompt_text else []
+    if message.attachments:
+                for attachment in message.attachments:
+                    if is_supported_file(attachment):
+                        file_bytes = await attachment.read()
+                        filename = attachment.filename.lower()
+                        mime_type = attachment.content_type
+
+                        # Proper MIME fallback for audio/songs when Discord sends generic octet-stream
+                        if not mime_type or mime_type == "application/octet-stream":
+                            if filename.endswith(('.mp3', '.mpeg')):
+                                mime_type = "audio/mp3"
+                            elif filename.endswith('.wav'):
+                                mime_type = "audio/wav"
+                            elif filename.endswith('.m4a'):
+                                mime_type = "audio/m4a"
+                            elif filename.endswith('.ogg'):
+                                mime_type = "audio/ogg"
+                            elif filename.endswith('.aac'):
+                                mime_type = "audio/aac"
+                            elif filename.endswith('.flac'):
+                                mime_type = "audio/flac"
+                            elif filename.endswith(('.png', '.jpg', '.jpeg', '.webp', '.gif')):
+                                mime_type = "image/jpeg"
+                            else:
+                                guessed = mimetypes.guess_type(filename)[0]
+                                mime_type = guessed or "audio/mp3"
+
+                        contents.append(
+                            genai.types.Part.from_bytes(
+                                data=file_bytes,
+                                mime_type=mime_type
+                            )
+                        )
+    for attempt in range(3):
             try:
                 response = client.models.generate_content(
                     model="gemini-3.6-flash",
