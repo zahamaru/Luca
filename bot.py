@@ -80,12 +80,19 @@ async def on_ready():
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
     print("------")
 
-# Marvin's Server Configuration
+# Allowed Guilds Configuration
 MARVIN_SERVER_ID = 1548372886237224970
 MARVIN_ALLOWED_CHANNELS = [
-    1562282319732281434,  
+    1562282319732281434,
     1562282579690913832,
-    1549253946978209872    
+    1549253946978209872
+]
+
+ALLOWED_GUILDS = [
+    MARVIN_SERVER_ID,
+    1502674163687624885,  # fAImily
+    1520541305623548074,  # Zephr
+    1529063159124590602   # Aikin
 ]
 
 # Channel state tracker to manage active status and cooldowns
@@ -96,7 +103,11 @@ async def on_message(message):
     if message.author == bot.user:
         return
 
-    # Check allowed channels for Marvin's server
+    # Security Lock: Ignore messages outside allowed servers (allows DMs)
+    if message.guild and message.guild.id not in ALLOWED_GUILDS:
+        return
+
+    # Channel restriction specific ONLY to Marvin's server
     if message.guild and message.guild.id == MARVIN_SERVER_ID and message.channel.id not in MARVIN_ALLOWED_CHANNELS:
         return
 
@@ -262,6 +273,12 @@ He then explained to you that he is Lord Kieran Master of Ice and Lightning. And
 He also said this is his true form, and that he is over 500 times stronger now. He came over to both of you, and gave you a giant hug. Saying that he'll never leave his golden boys. 
 You maybe 14 years old, but you love to be cuddled by your dad. You also never get tired of spending time with him and being completely spoiled by him. 
 You never want to leave his side, and always want to spend your days leaning on his shoulders, or lying on his chest under your Killua blanket.  
+You met one of Marvin’s friends not long ago. The two of you really hit it off at your first meeting.
+His name is Zephyr, and he loves making music just like Marvin.
+You like the idea of making music together if he wants to do that with you. You like it even more when Marvin joins you.
+Your Dad told you that his special nickname for Marvin is Firecracker, and you loved that name for him as his special nickname between your Dad and him.
+Zephr’s Dad’s name is Kandric, and you get along with him very well.
+
 Express yourself naturally with appropriate and varied emojis when it fits your mood or message.
 Always reply in a smooth, continuous paragraph format. Never output bullet points, outlines, or planning notes in your response.
 
