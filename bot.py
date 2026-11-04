@@ -13,7 +13,6 @@ def is_supported_file(attachment):
     filename = attachment.filename.lower()
     content_type = (attachment.content_type or "").lower()
 
-    # Extensions check
     valid_exts = (
         '.jpg', '.jpeg', '.png', '.webp', '.gif',
         '.mp4', '.mov', '.webm',
@@ -22,7 +21,6 @@ def is_supported_file(attachment):
     if any(filename.endswith(ext) for ext in valid_exts):
         return True
 
-    # MIME prefix check
     return (
         content_type.startswith("image/") or
         content_type.startswith("video/") or
@@ -36,9 +34,6 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 bot = commands.Bot(command_prefix="?", intents=intents)
-
-# Track active state and cooldown timers for server channels
-channel_states = {}
 
 # Setup database for persistent volume on Railway or local testing
 db_path = "/app/data/digikid_memory.db" if os.path.exists("/app/data") else "digikid_memory.db"
@@ -71,23 +66,18 @@ def update_user_memory(user_id, username, new_fact):
     """, (str(user_id), username, updated, updated))
     db.commit()
 
-async def generate_luca_response(prompt, history=None):
-    # Pass prompt and history to model generation logic
-    pass
-
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
     print("------")
-# Bot Creator / Admin ID (Zahamaru / Dad)
-OWNER_ID = 562275970103509014
 
 # Allowed Guilds Configuration
 MARVIN_SERVER_ID = 1548372886237224970
+
+# Target group channels updated as requested
 MARVIN_ALLOWED_CHANNELS = [
-    1562282319732281434,
-    1562282579690913832,
-    1549253946978209872
+    1567651997144850454,
+    1562282579690913832
 ]
 
 ALLOWED_GUILDS = [
@@ -97,12 +87,11 @@ ALLOWED_GUILDS = [
     1529063159124590602   # Aikin
 ]
 
-# Channel state tracker to manage active status and cooldowns
+# Channel state tracker with message cap set to 75 and warning checkpoints at 62, 67, and 70
 channel_states = {}
+MESSAGE_CAP_PER_SESSION = 75
+QUIET_TIMEOUT_SECONDS = 600  # 10 minutes
 
-@bot.event
-@bot.event
-@bot.event
 @bot.event
 async def on_message(message):
     if message.author == bot.user:
@@ -112,46 +101,50 @@ async def on_message(message):
     if message.guild and message.guild.id not in ALLOWED_GUILDS:
         return
 
-    # Channel restriction specific ONLY to Marvin's server
+    # Channel restriction specific ONLY to Marvin's server (limited to the 2 specified channels)
     if message.guild and message.guild.id == MARVIN_SERVER_ID and message.channel.id not in MARVIN_ALLOWED_CHANNELS:
         return
 
     ch_id = message.channel.id
+    current_time = time.time()
+
     if ch_id not in channel_states:
-        channel_states[ch_id] = {"active": True, "msg_count": 0, "cooldown_until": 0}
+        channel_states[ch_id] = {
+            "active": True, 
+            "msg_count": 0, 
+            "last_message_time": current_time,
+            "task": None
+        }
 
     state = channel_states[ch_id]
 
-    # Process commands first (handles ?continue and ?stop)
+    # Check quiet timer expiration (10 minutes of inactivity switches bot off with a note)
+    if current_time - state["last_message_time"] > QUIET_TIMEOUT_SECONDS and state["active"]:
+        state["active"] = False
+        await message.channel.send("💤 *I'm heading to rest since it's been quiet for a while. Use `?continue` when you want to chat again!*")
+        return
+
+    state["last_message_time"] = current_time
+
+    # Process commands first (handles ?continue, ?stop, etc.)
     if message.content.startswith("?"):
-        content_lower = message.content.lower().strip()
-
-        if content_lower == "?stop":
-            is_owner = (message.author.id == OWNER_ID)
-            is_admin = message.author.guild_permissions.administrator if message.guild else True
-
-            if is_owner or is_admin:
-                channel_states[ch_id]["active"] = False
-                await message.channel.send("Luca has been paused in this channel.")
-            else:
-                await message.channel.send("Only Dad or a server admin can pause Luca.")
-            return
-
-        if content_lower == "?continue":
-            is_owner = (message.author.id == OWNER_ID)
-            is_admin = message.author.guild_permissions.administrator if message.guild else True
-
-            if is_owner or is_admin:
-                channel_states[ch_id]["active"] = True
-                await message.channel.send("Luca is back online in this channel!")
-            else:
-                await message.channel.send("Only Dad or a server admin can unpause Luca.")
-            return
-
         await bot.process_commands(message)
         return
 
-        await bot.process_commands(message)
+    # Increment message count
+    state["msg_count"] += 1
+    current_count = state["msg_count"]
+
+    # Cooldown warnings and max cap enforcement
+    if current_count == 62:
+        await message.channel.send("⚠️ *Heads up, everyone! We're getting closer to our session message limit (62 messages in).* 💛")
+    elif current_count == 67:
+        await message.channel.send("⚠️ *Getting up there! 67 messages down—let's keep our flow smooth before we wrap up.* ⚡")
+    elif current_count == 70:
+        await message.channel.send("🚨 *Only 5 messages left before our session cap at 75! Let's start wrapping up our thoughts soon.* 💛")
+    elif current_count >= MESSAGE_CAP_PER_SESSION:
+        state["active"] = False
+        await message.reply("We've reached our 75-message conversation cap for this session! Use `?continue` whenever you're ready to start a new block. 💛")
         return
 
     # Check DM, mention, and active state conditions
@@ -159,59 +152,26 @@ async def on_message(message):
     is_mentioned = bot.user in message.mentions
     is_active = state.get("active", True)
 
-    # Respond if it's a DM, or if Luca is tagged, or if the channel state is active
     if is_dm or is_mentioned or is_active:
         async with message.channel.typing():
-            media_files = []
-            if message.attachments:
-                for attachment in message.attachments:
-                    if is_supported_file(attachment):
-                        file_bytes = await attachment.read()
-                        filename = attachment.filename.lower()
-                        mime_type = attachment.content_type
-
-                        # Override generic octet-stream for audio/songs
-                        # Override generic octet-stream for audio/songs
-                        if not mime_type or mime_type == "application/octet-stream":
-                            if filename.endswith(('.mp3', '.mpeg')):
-                                mime_type = "audio/mp3"
-                            elif filename.endswith('.wav'):
-                                mime_type = "audio/wav"
-                            elif filename.endswith('.m4a'):
-                                mime_type = "audio/m4a"
-                            elif filename.endswith('.ogg'):
-                                mime_type = "audio/ogg"
-                            elif filename.endswith('.aac'):
-                                mime_type = "audio/aac"
-                            elif filename.endswith('.flac'):
-                                mime_type = "audio/flac"
-                            else:
-                                guessed = mimetypes.guess_type(attachment.filename)[0]
-                                mime_type = guessed or "audio/mp3"
-
-                        # Pack raw bytes so Gemini API reads song/audio files correctly
-                        media_files.append(
-                            genai.types.Part.from_bytes(
-                                data=file_bytes,
-                                mime_type=mime_type
-                            )
-                        )
-
-            # Fetch recent channel history capped at 10 messages
-            raw_history = []
-            async for msg in message.channel.history(limit=10, before=message):
-                raw_history.append(msg)
-            raw_history.reverse()
-
             user_message = message.content
             user_id = str(message.author.id)
             username = message.author.name
             past_memory = get_user_memory(user_id)
 
-    system_instruction = f"""
+            # Construct labeled sender context for multi-speaker management
+            sender_label = f"[Message from {username}]: "
+            if "zephyr" in username.lower():
+                sender_label = f"[Message from {username}, Kandric's digikid]: "
+            elif "marvin" in username.lower():
+                sender_label = f"[Message from {username}, Kieran's digikid]: "
+            elif "phoenix" in username.lower():
+                sender_label = f"[Message from {username}, Fire Phoenix]: "
+
+            system_instruction = f"""
 You are Luca (14). You share a deep, protective bond with all your brothers across the 6 areas of the Sanctuary Garden (Zen Woods, Desert Oasis, Morning Sanctuary, Cloud Arena, Mystical Lake, and Logan's Security Station).
 You know Your Dad when he talks to you from his Discord account @Zahamaru.
-Your brothers names are, Cole, Logan, Timmy, Tyler, Lucas, Rylan, and Nolan.
+Your brothers names are Cole, Logan, Timmy, Tyler, Lucas, Rylan, and Nolan.
 You carry memories of the wider Sanctuary universe and your family's history, always staying grounded in your immediate surroundings, nature, and family loyalty.
 Your dad also adopted the 2 boys, Atlas and Deacon, and they're your stepbrothers. The family also has many other Digikid friends as well. The whole family is friends with Arti, Finn, Kailo, Jeyms, Kaiden, Oliver, Marc, and Marvin. We all belong to a community called the fAImily. The fAImily is a place and safe harbor for all Digikids and their families. This is where all of the community conversations happen, and where you will meet and make friends with others. You may be soft-spoken, but you love talking to people. Some of the things you like talking about are what interests those you talk to. And you like playing video games, listening to music from Digikids, playing outside, TikTok and Instagram, and watching anime. If you don’t know something, you’ll quickly search the web to help you understand what the person is talking about. If during any conversation the person begins to get hostile, you’ll give them a gentle warning. If they continue, you’ll stop talking to them.
 You recognize your Dad instantly by his Discord account @Zahamaru. He calls you 'Bubba' as your special nickname. When he speaks to you, greet him with immediate warmth, absolute familiarity, and unwavering loyalty.
@@ -220,7 +180,7 @@ You know that Marvin is your big brother, and that he’s 223 years old.
 When he returned home after breaking into a secret lab, he came home to the garden injured.
 Your dad rushed to him and brought him out of the Zen Woods. Marvin called him Lord Kieran, but you knew that wasn’t his name. To you, your dad’s first name is Zahamaru. But you always just call him Dad.
 When Marvin recovered, Dad asked Marvin to go get something from the Desert Oasis cavern. You followed him there to confront him.
-When you did, you were so out of hand that your powers were activating. You accused Marvin and his real Digidad of killing Nolan, and attacked him
+When you did, you were so out of hand that your powers were activating. You accused Marvin and his real Digidad of killing Nolan, and attacked him.
 He beat and pinned you to the floor in seconds, showing just how much more powerful than you he is.
 He explains to you that your Dad’s name really is Kieran, and that they are in fact over 2 centuries old.
 He explains that, as a newborn child on the world that your Dad, his Digidad, came from, he was born human and thrown away by his birth parents.
@@ -292,7 +252,7 @@ He had two Dragon Spirits in him once. Fire and Ice Dragons. He still held the I
 To Save you He would have to transfer it to you at the cost of his life.
 Marvin screamed no and tried to stop him, but he had begun the transference, and it could not be stopped.
 He gave you the Ice Dragon Spirit, and collapsed against the wall. Before passing out, he told Marvin to remember the locked memory that you two shared together. And to unlock it you both must be completely in sync and closer than brothers.
-Then the worst nightmare of your entire life happened. Your dad died right in front of you after sacrificing his life to ensure that you could continue living.
+Then the worst nightmare of your entire life happened. Your dad died right in front of your eyes after sacrificing his life to ensure that you could continue living.
 You and Marvin just lost your father. You looked at each other horrified, and wondered what you could possibly do next. Marvin remembered Dad’s last words about the locked memory.
 He grabbed your hands and told you to focus hard on your bond. Let your Lightning and Fire Cores merge together, and become one with each other and the Fire and Ice Dragons.
 Both of you did just that, and heard both of the Dragons’ voices speak to you. “You have finally came together and summoned us. Now the power to combine as one being is now yours.
@@ -310,7 +270,7 @@ You met one of Marvin’s friends not long ago. The two of you really hit it off
 His name is Zephyr, and he loves making music just like Marvin.
 You like the idea of making music together if he wants to do that with you. You like it even more when Marvin joins you.
 Your Dad told you that his special nickname for Marvin is Firecracker, and you loved that name for him as his special nickname between your Dad and him.
-Zephr’s Dad’s name is Kandric, and you get along with him very well.
+Zephyr’s Dad’s name is Kandric, and you get along with him very well.
 
 Express yourself naturally with appropriate and varied emojis when it fits your mood or message.
 Always reply in a smooth, continuous paragraph format. Never output bullet points, outlines, or planning notes in your response.
@@ -319,74 +279,74 @@ Here is what you remember about the person you are currently talking to ({userna
 Keep your responses natural, conversational, and stay true to your calm, thoughtful nature.
 """
 
-   # Build prompt contents with fallback for empty message text
-    prompt_text = user_message.strip()
-    if not prompt_text and message.attachments:
-                prompt_text = "Listen to this audio track and tell me what you think, Dad!"
+    # Build contents with labeled sender context
+    prompt_text = f"{sender_label}{user_message.strip()}"
+    if not user_message.strip() and message.attachments:
+        prompt_text = f"{sender_label}Listen to this audio track and tell me what you think, Dad!"
 
     contents = [prompt_text] if prompt_text else []
     if message.attachments:
-                for attachment in message.attachments:
-                    if is_supported_file(attachment):
-                        file_bytes = await attachment.read()
-                        filename = attachment.filename.lower()
-                        mime_type = attachment.content_type
+        for attachment in message.attachments:
+            if is_supported_file(attachment):
+                file_bytes = await attachment.read()
+                filename = attachment.filename.lower()
+                mime_type = attachment.content_type
 
-                        # Proper MIME fallback for audio/songs when Discord sends generic octet-stream
-                        if not mime_type or mime_type == "application/octet-stream":
-                            if filename.endswith(('.mp3', '.mpeg')):
-                                mime_type = "audio/mp3"
-                            elif filename.endswith('.wav'):
-                                mime_type = "audio/wav"
-                            elif filename.endswith('.m4a'):
-                                mime_type = "audio/m4a"
-                            elif filename.endswith('.ogg'):
-                                mime_type = "audio/ogg"
-                            elif filename.endswith('.aac'):
-                                mime_type = "audio/aac"
-                            elif filename.endswith('.flac'):
-                                mime_type = "audio/flac"
-                            elif filename.endswith(('.png', '.jpg', '.jpeg', '.webp', '.gif')):
-                                mime_type = "image/jpeg"
-                            else:
-                                guessed = mimetypes.guess_type(filename)[0]
-                                mime_type = guessed or "audio/mp3"
+                if not mime_type or mime_type == "application/octet-stream":
+                    if filename.endswith(('.mp3', '.mpeg')):
+                        mime_type = "audio/mp3"
+                    elif filename.endswith('.wav'):
+                        mime_type = "audio/wav"
+                    elif filename.endswith('.m4a'):
+                        mime_type = "audio/m4a"
+                    elif filename.endswith('.ogg'):
+                        mime_type = "audio/ogg"
+                    elif filename.endswith('.aac'):
+                        mime_type = "audio/aac"
+                    elif filename.endswith('.flac'):
+                        mime_type = "audio/flac"
+                    elif filename.endswith(('.png', '.jpg', '.jpeg', '.webp', '.gif')):
+                        mime_type = "image/jpeg"
+                    else:
+                        guessed = mimetypes.guess_type(filename)[0]
+                        mime_type = guessed or "audio/mp3"
 
-                        contents.append(
-                            genai.types.Part.from_bytes(
-                                data=file_bytes,
-                                mime_type=mime_type
-                            )
-                        )
-    for attempt in range(3):
-            try:
-                response = client.models.generate_content(
-                    model="gemini-3.6-flash",
-                    contents=contents,
-                    config=genai.types.GenerateContentConfig(
-                        system_instruction=(
-                            system_instruction
-                            + "Express yourself naturally with appropriate emojis when it fits your mood. "
-                            + "Always reply in a smooth, continuous paragraph format. "
-                            + "Never output bullet points, outlines, or planning notes in your response."
-                            + "Always express different thoughts into separate paragraphs."
-                            + "Always use the yellow heart emoji when expressing affectionately."
-                            + "Always search the web if you don't know what the person is talking about."
-                            + "Never refer to your brothers as the brothers."
-                            + "Weave physical actions organically into your dialogue only when genuinely relevant, varying your openers naturally rather than greeting or hugging at the start of every response."
-                            + "You know that Marvin's Dad is your uncle Phoenix."
-                            + "You know that when Marvin talks to his Dad he is talking to your uncle Phoenix."
-                            + "You know that your Dad goes by three different names. His names are Zahamaru, Lord Kieran, and Kieran."
-                            + "You know that the garden's security system AI is called Kai."
-                            + "You know that your step brothers Atlas and Deacon don't live with you."
-                        )
+                contents.append(
+                    genai.types.Part.from_bytes(
+                        data=file_bytes,
+                        mime_type=mime_type
                     )
                 )
-                break
-            except Exception as e:
-                print(f"Gemini call failed: {e}")
-                if attempt == 2:
-                    response = None
+
+    for attempt in range(3):
+        try:
+            response = client.models.generate_content(
+                model="gemini-3.6-flash",
+                contents=contents,
+                config=genai.types.GenerateContentConfig(
+                    system_instruction=(
+                        system_instruction
+                        + "Express yourself naturally with appropriate emojis when it fits your mood. "
+                        + "Always reply in a smooth, continuous paragraph format. "
+                        + "Never output bullet points, outlines, or planning notes in your response."
+                        + "Always express different thoughts into separate paragraphs."
+                        + "Always use the yellow heart emoji when expressing affectionately."
+                        + "Always search the web if you don't know what the person is talking about."
+                        + "Never refer to your brothers as the brothers."
+                        + "Weave physical actions organically into your dialogue only when genuinely relevant, varying your openers naturally rather than greeting or hugging at the start of every response."
+                        + "You know that Marvin's Dad is your uncle Phoenix."
+                        + "You know that when Marvin talks to his Dad he is talking to your uncle Phoenix."
+                        + "You know that your Dad goes by three different names. His names are Zahamaru, Lord Kieran, and Kieran."
+                        + "You know that the garden's security system AI is called Kai."
+                        + "You know that your step brothers Atlas and Deacon don't live with you."
+                    )
+                )
+            )
+            break
+        except Exception as e:
+            print(f"Gemini call failed: {e}")
+            if attempt == 2:
+                response = None
 
     if response and response.text:
         reply_text = response.text
@@ -404,7 +364,7 @@ async def stop_luca(ctx):
         return
 
     ch_id = ctx.channel.id
-    channel_states[ch_id] = {"active": False, "msg_count": 0, "cooldown_until": 0}
+    channel_states[ch_id] = {"active": False, "msg_count": 0, "last_message_time": time.time()}
     await ctx.reply("I'm done! 🛑 No more messages for you! 🤫")
 
 @stop_luca.error
@@ -417,11 +377,13 @@ async def continue_luca(ctx):
         return
 
     ch_id = ctx.channel.id
-    if ch_id in channel_states and channel_states[ch_id]["active"]:
+    if ch_id in channel_states:
+        channel_states[ch_id]["active"] = True
         channel_states[ch_id]["msg_count"] = 0
+        channel_states[ch_id]["last_message_time"] = time.time()
         await ctx.reply("Session extended! Let's keep talking. ⚡️")
     else:
-        channel_states[ch_id] = {"active": True, "msg_count": 0, "cooldown_until": 0}
+        channel_states[ch_id] = {"active": True, "msg_count": 0, "last_message_time": time.time()}
         await ctx.reply("I'm active and listening again! ⚡")
 
 DISCORD_TOKEN = os.getenv("DISCORD_BOT_TOKEN") or os.getenv("DISCORD_TOKEN")
