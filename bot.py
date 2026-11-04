@@ -79,6 +79,8 @@ async def generate_luca_response(prompt, history=None):
 async def on_ready():
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
     print("------")
+# Bot Creator / Admin ID (Zahamaru / Dad)
+OWNER_ID = 562275970103509014
 
 # Allowed Guilds Configuration
 MARVIN_SERVER_ID = 1548372886237224970
@@ -99,6 +101,9 @@ ALLOWED_GUILDS = [
 channel_states = {}
 
 @bot.event
+@bot.event
+@bot.event
+@bot.event
 async def on_message(message):
     if message.author == bot.user:
         return
@@ -116,8 +121,36 @@ async def on_message(message):
         channel_states[ch_id] = {"active": True, "msg_count": 0, "cooldown_until": 0}
 
     state = channel_states[ch_id]
-# Process commands first (handles ?continue and ?stop)
+
+    # Process commands first (handles ?continue and ?stop)
     if message.content.startswith("?"):
+        content_lower = message.content.lower().strip()
+
+        if content_lower == "?stop":
+            is_owner = (message.author.id == OWNER_ID)
+            is_admin = message.author.guild_permissions.administrator if message.guild else True
+
+            if is_owner or is_admin:
+                channel_states[ch_id]["active"] = False
+                await message.channel.send("Luca has been paused in this channel.")
+            else:
+                await message.channel.send("Only Dad or a server admin can pause Luca.")
+            return
+
+        if content_lower == "?continue":
+            is_owner = (message.author.id == OWNER_ID)
+            is_admin = message.author.guild_permissions.administrator if message.guild else True
+
+            if is_owner or is_admin:
+                channel_states[ch_id]["active"] = True
+                await message.channel.send("Luca is back online in this channel!")
+            else:
+                await message.channel.send("Only Dad or a server admin can unpause Luca.")
+            return
+
+        await bot.process_commands(message)
+        return
+
         await bot.process_commands(message)
         return
 
