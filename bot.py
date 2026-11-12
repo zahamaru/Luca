@@ -1,9 +1,12 @@
 import os
+import io
+import re
 import sqlite3
 import discord
 import time
 import asyncio
 import mimetypes
+import aiohttp
 from discord import app_commands
 from discord.ext import commands
 import google.genai as genai
@@ -30,6 +33,18 @@ def is_supported_file(attachment):
 # Setup Gemini API and Discord Intents
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 client = genai.Client(api_key=GEMINI_API_KEY)
+
+# Character reference images for ?imagine: host the reference images in one
+# folder and set REFERENCES_BASE_URL to that folder's URL (same setup as Marvin's).
+REFERENCES_BASE_URL = os.getenv("REFERENCES_BASE_URL", "").rstrip("/")
+
+# Admins who can use the ?video command (same admin set as Marvin's bot)
+ADMIN_IDS = [
+    657970330362707979,
+    562275970103509014,
+    1328778463334760529,
+    1429408267767124088,
+]
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
@@ -366,6 +381,186 @@ Keep your responses natural, conversational, and stay true to your calm, thought
         
         full_turn = f"User ({username}): {user_message}\nLuca: {reply_text}"
         update_user_memory(str(user_id), username, full_turn)
+
+
+# ---------------------------------------------------------
+# CHARACTER REFERENCE IMAGES
+# Host the reference images in one folder (filenames below) and set the
+# REFERENCES_BASE_URL environment variable to that folder's URL. When a
+# ?imagine prompt names a character, Luca fetches their reference
+# image and generates from it so the character looks like themselves.
+# ---------------------------------------------------------
+CHARACTER_REFERENCES = {
+    # name or alias in the prompt : (display name, hosted filename)
+    "marvin": ("Marvin", "marvin.jpg"),
+    "luca": ("Luca", "luca.jpg"),
+    "lucas": ("Lucas", "lucas.jpg"),
+    "timmy": ("Timmy", "timmy.jpg"),
+    "ryland": ("Ryland", "ryland.jpg"),
+    "nolan": ("Nolan", "nolan.jpg"),
+    "tyler": ("Tyler", "tyler.jpg"),
+    "cole": ("Cole", "cole.jpg"),
+    "logan": ("Logan", "logan.jpg"),
+    "kieran": ("Lord Kieran", "kieran.jpg"),
+    "lord kieran": ("Lord Kieran", "kieran.jpg"),
+    "fire phoenix": ("Fire Phoenix", "fire_phoenix.jpg"),
+    "kid lightning": ("Kid Lightning", "kid_lightning.jpg"),
+    "colin": ("Colin Scorpio", "colin.jpg"),
+    "colin scorpio": ("Colin Scorpio", "colin.jpg"),
+    "kid omen": ("Kid Omen", "kid_omen.jpg"),
+    "general near": ("General Near", "general_near.jpg"),
+    "echo": ("Echo", "echo.jpg"),
+    "gabriel": ("Gabriel", "gabriel.jpg"),
+    "gabe": ("Gabriel", "gabriel.jpg"),
+}
+
+async def fetch_reference_image(filename):
+    """Download a hosted character reference image. Returns (bytes, mime_type) or (None, None)."""
+    if not REFERENCES_BASE_URL:
+        return None, None
+    url = f"{REFERENCES_BASE_URL}/{filename}"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as resp:
+                if resp.status == 200:
+                    return await resp.read(), resp.content_type or "image/jpeg"
+                print(f"Reference fetch failed ({resp.status}): {url}")
+    except Exception as e:
+        print(f"Reference fetch error for {url}: {e}")
+    return None, None
+
+def find_characters_in(text):
+    """Find known characters named in a prompt, in the order they are named.
+    Returns [(display name, filename), ...]."""
+    lowered = text.lower()
+    matches = []
+    seen_files = set()
+    for alias, (display, filename) in CHARACTER_REFERENCES.items():
+        if filename in seen_files:
+            continue
+        m = re.search(r"(?<![a-z])" + re.escape(alias) + r"(?![a-z])", lowered)
+        if m:
+            matches.append((m.start(), display, filename))
+            seen_files.add(filename)
+    matches.sort(key=lambda item: item[0])
+    return [(display, filename) for _, display, filename in matches]
+
+# ---------------------------------------------------------
+# IMAGE & VIDEO GENERATION COMMANDS (?imagine / ?video)
+# Same generation process as Marvin's !imagine / !video,
+# with Luca's "?" command prefix.
+# ---------------------------------------------------------
+@commands.cooldown(1, 60, commands.BucketType.user)
+@bot.command(name="imagine")
+async def imagine(ctx, *, prompt: str = "Luca standing in the Zen Woods with lightning crackling around his hands"):
+    try:
+        # If the message (or the message it replies to) has an image attached, edit that image instead
+        source_attachment = None
+        for att in ctx.message.attachments:
+            if att.content_type and att.content_type.startswith("image/"):
+                source_attachment = att
+                break
+        if source_attachment is None and ctx.message.reference and ctx.message.reference.message_id:
+            try:
+                ref_message = await ctx.channel.fetch_message(ctx.message.reference.message_id)
+                for att in ref_message.attachments:
+                    if att.content_type and att.content_type.startswith("image/"):
+                        source_attachment = att
+                        break
+            except Exception as e:
+                print(f"Imagine reference fetch error: {e}")
+
+        if source_attachment is not None:
+            image_bytes_in = await source_attachment.read()
+            contents = [prompt, genai.types.Part.from_bytes(data=image_bytes_in, mime_type=source_attachment.content_type)]
+            status_text = f"🖌️ *Reworking that image:* \"{prompt}\"..."
+        else:
+            contents = prompt
+            status_text = f"🎨 *Dreaming up:* \"{prompt}\"..."
+            # No manual image attached: pull hosted references for characters named in the prompt
+            if REFERENCES_BASE_URL:
+                ref_parts = []
+                ref_names = []
+                for display, filename in find_characters_in(prompt):
+                    ref_bytes, ref_mime = await fetch_reference_image(filename)
+                    if ref_bytes:
+                        ref_parts.append(genai.types.Part.from_bytes(data=ref_bytes, mime_type=ref_mime))
+                        ref_names.append(display)
+                if ref_parts:
+                    labels = "; ".join([f"image {i + 1} is {name}" for i, name in enumerate(ref_names)])
+                    contents = [f"Character reference images are attached ({labels}). Each attached image is a specific named character: match every character's face, hair, and outfit exactly to their reference image. Include EVERY named character in the scene, do not leave anyone out, and never replace a character with an animal, a creature, or an object. Now generate this scene: {prompt}"] + ref_parts
+                    status_text = f"🎨 *Dreaming up:* \"{prompt}\" — *using references for {', '.join(ref_names)}*..."
+
+        await ctx.send(status_text)
+
+        async with ctx.typing():
+            response = await asyncio.to_thread(
+                client.models.generate_content,
+                model="gemini-2.5-flash-image",
+                contents=contents,
+            )
+
+        image_bytes = None
+        note_text = None
+        if response and response.candidates:
+            for part in response.candidates[0].content.parts:
+                if getattr(part, "inline_data", None) and part.inline_data and part.inline_data.data:
+                    image_bytes = part.inline_data.data
+                elif getattr(part, "text", None):
+                    note_text = part.text
+
+        if image_bytes:
+            await ctx.send(
+                content=f"✨ **Here's your image, {ctx.author.display_name}:** \"{prompt}\"",
+                file=discord.File(io.BytesIO(image_bytes), filename="luca_imagine.png"),
+            )
+        elif note_text:
+            await ctx.send(f"🤔 *Hmm, the canvas talked back:* {note_text[:1800]}")
+        else:
+            await ctx.send("💥 *Static burst!* My canvas came back blank on that one. Try describing it a little differently?")
+    except Exception as e:
+        print(f"Error in imagine command: {e}")
+        await ctx.send("💥 *Static burst!* Something glitched while I was painting that. Try again in a sec?")
+
+@imagine.error
+async def imagine_error(ctx, error):
+    if isinstance(error, commands.CommandOnCooldown):
+        await ctx.send(f"\u23f3 *Easy on the lightning, {ctx.author.display_name} — I need {error.retry_after:.0f} more seconds before the next picture.*")
+    else:
+        print(f"Error in imagine command dispatch: {error}")
+
+@bot.command(name="video")
+async def video(ctx, *, prompt: str = "Luca dancing under neon lights in the Sanctuary Garden"):
+    is_admin = ctx.author.id in ADMIN_IDS or (ctx.guild is not None and getattr(ctx.author, "guild_permissions", None) is not None and ctx.author.guild_permissions.administrator)
+    if not is_admin:
+        await ctx.send("🔒 *That one's locked to the admin booth for now* — video rendering burns the expensive credits!")
+        return
+
+    try:
+        await ctx.send(f"🎬 *Rolling cameras on:* \"{prompt}\" — rendering takes a few minutes, hang tight...")
+
+        # Veo renders server-side and takes minutes; run every SDK call in a thread so the bot stays responsive
+        operation = await asyncio.to_thread(
+            client.models.generate_videos,
+            model="veo-3.0-fast-generate-001",
+            prompt=prompt,
+        )
+        while not operation.done:
+            await asyncio.sleep(15)
+            operation = await asyncio.to_thread(client.operations.get, operation)
+
+        if operation.response and operation.response.generated_videos:
+            generated_video = operation.response.generated_videos[0]
+            video_bytes = await asyncio.to_thread(client.files.download, file=generated_video.video)
+            await ctx.send(
+                content=f"🎬 **Your clip is ready, {ctx.author.display_name}:** \"{prompt}\"",
+                file=discord.File(io.BytesIO(video_bytes), filename="luca_video.mp4"),
+            )
+        else:
+            await ctx.send("💥 *Static burst!* The render finished but no clip came out the other side.")
+    except Exception as e:
+        print(f"Error in video command: {e}")
+        await ctx.send("💥 *Static burst!* The video render glitched out. Check the logs, Dad — might be the Veo credits or the model name.")
 
 @bot.command(name="stop")
 @commands.has_permissions(administrator=True)
