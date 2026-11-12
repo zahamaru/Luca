@@ -169,18 +169,18 @@ async def on_message(message):
         await bot.process_commands(message)
         return
 
-    # Increment message count
-    state["msg_count"] += 1
-    current_count = state["msg_count"]
+    # Increment message count and enforce the cap (DMs have NO message limit)
+    if not isinstance(message.channel, discord.DMChannel):
+        state["msg_count"] += 1
+        current_count = state["msg_count"]
 
-    # Cooldown warning and max cap enforcement (per-channel limits)
-    message_limit = get_message_limit(ch_id)
-    if current_count == get_warning_threshold(ch_id):
-        await message.channel.send(f"⚠️ *Heads up, everyone! We're getting closer to our session message limit ({current_count} messages in, cap is {message_limit}).* 💛")
-    elif current_count >= message_limit:
-        state["active"] = False
-        await message.reply(f"We've reached our {message_limit}-message conversation cap for this session! Use `?continue` whenever you're ready to start a new block. 💛")
-        return
+        message_limit = get_message_limit(ch_id)
+        if current_count == get_warning_threshold(ch_id):
+            await message.channel.send(f"⚠️ *Heads up, everyone! We're getting closer to our session message limit ({current_count} messages in, cap is {message_limit}).* 💛")
+        elif current_count >= message_limit:
+            state["active"] = False
+            await message.reply(f"We've reached our {message_limit}-message conversation cap for this session! Use `?continue` whenever you're ready to start a new block. 💛")
+            return
 
     # Check DM, mention, and active state conditions
     is_dm = isinstance(message.channel, discord.DMChannel)
