@@ -488,7 +488,7 @@ async def imagine(ctx, *, prompt: str = "Luca standing in the Zen Woods with lig
                         ref_names.append(display)
                 if ref_parts:
                     labels = "; ".join([f"image {i + 1} is {name}" for i, name in enumerate(ref_names)])
-                    contents = [f"Character reference images are attached ({labels}). Each attached image is a specific named character: match every character's face, hair, and outfit exactly to their reference image. Include EVERY named character in the scene, do not leave anyone out, and never replace a character with an animal, a creature, or an object. Now generate this scene: {prompt}"] + ref_parts
+                    contents = [f"Character reference images are attached ({labels}). Each attached image is a specific named character: match every character's face, hair, and outfit exactly to their reference image. Include EVERY named character in the scene, do not leave anyone out, and never replace a character with an animal, a creature, or an object. The named characters are the MAIN SUBJECTS of the image: place every named character front-and-center, prominently and roughly equally sized, fully visible with their face clearly in view. Do NOT push any named character into the background, make them smaller than the others, or turn them into a background extra while another character dominates the scene. Do NOT add any other people to the scene: the named characters are the ONLY people in the image, unless the prompt explicitly asks for additional people. Now generate this scene: {prompt}"] + ref_parts
                     status_text = f"🎨 *Dreaming up:* \"{prompt}\" — *using references for {', '.join(ref_names)}*..."
 
         await ctx.send(status_text)
