@@ -156,8 +156,8 @@ async def on_message(message):
 
     state = channel_states[ch_id]
 
-    # Check quiet timer expiration (10 minutes of inactivity switches bot off with a note)
-    if current_time - state["last_message_time"] > QUIET_TIMEOUT_SECONDS and state["active"]:
+    # Check quiet timer expiration (10 minutes of inactivity switches bot off with a note) - DMs are exempt: no restrictions in DMs
+    if not isinstance(message.channel, discord.DMChannel) and current_time - state["last_message_time"] > QUIET_TIMEOUT_SECONDS and state["active"]:
         state["active"] = False
         await message.channel.send("💤 *I'm heading to rest since it's been quiet for a while. Use `?continue` when you want to chat again!*")
         return
