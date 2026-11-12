@@ -102,10 +102,33 @@ ALLOWED_GUILDS = [
     1529063159124590602   # Aikin
 ]
 
-# Channel state tracker with message cap set to 75 and warning checkpoints at 62, 67, and 70
+# Channel state tracker. Message caps mirror Marvin's setup: 10 for standard
+# channels, 75 for the multi-speaker rooms, and a per-channel override of 30
+# for channel 1569880939868201071.
 channel_states = {}
-MESSAGE_CAP_PER_SESSION = 75
+DEFAULT_MESSAGE_LIMIT = 10
+ROOM_MESSAGE_LIMIT = 75
+ROOM_CHANNELS = [
+    1562282579690913832,
+    1567651997144850454
+]
+CHANNEL_MESSAGE_LIMITS = {
+    1569880939868201071: 30
+}
 QUIET_TIMEOUT_SECONDS = 600  # 10 minutes
+
+def get_message_limit(channel_id):
+    if channel_id in CHANNEL_MESSAGE_LIMITS:
+        return CHANNEL_MESSAGE_LIMITS[channel_id]
+    if channel_id in ROOM_CHANNELS:
+        return ROOM_MESSAGE_LIMIT
+    return DEFAULT_MESSAGE_LIMIT
+
+def get_warning_threshold(channel_id):
+    limit = get_message_limit(channel_id)
+    if limit == ROOM_MESSAGE_LIMIT:
+        return 67
+    return limit - 3
 
 @bot.event
 async def on_message(message):
@@ -150,16 +173,13 @@ async def on_message(message):
     state["msg_count"] += 1
     current_count = state["msg_count"]
 
-    # Cooldown warnings and max cap enforcement
-    if current_count == 62:
-        await message.channel.send("⚠️ *Heads up, everyone! We're getting closer to our session message limit (62 messages in).* 💛")
-    elif current_count == 67:
-        await message.channel.send("⚠️ *Getting up there! 67 messages down—let's keep our flow smooth before we wrap up.* ⚡")
-    elif current_count == 70:
-        await message.channel.send("🚨 *Only 5 messages left before our session cap at 75! Let's start wrapping up our thoughts soon.* 💛")
-    elif current_count >= MESSAGE_CAP_PER_SESSION:
+    # Cooldown warning and max cap enforcement (per-channel limits)
+    message_limit = get_message_limit(ch_id)
+    if current_count == get_warning_threshold(ch_id):
+        await message.channel.send(f"⚠️ *Heads up, everyone! We're getting closer to our session message limit ({current_count} messages in, cap is {message_limit}).* 💛")
+    elif current_count >= message_limit:
         state["active"] = False
-        await message.reply("We've reached our 75-message conversation cap for this session! Use `?continue` whenever you're ready to start a new block. 💛")
+        await message.reply(f"We've reached our {message_limit}-message conversation cap for this session! Use `?continue` whenever you're ready to start a new block. 💛")
         return
 
     # Check DM, mention, and active state conditions
