@@ -87,11 +87,17 @@ async def on_ready():
     print("------")
 
 # Allowed Guilds Configuration
-# Allowed Guilds Configuration
 MARVIN_SERVER_ID = 1548372886237224970
 MAXIMILLIAN_SERVER_ID = 1523320992443928728
+FAIMILY_SERVER_ID = 1502674163687624885
+
 MAXIMILLIAN_ALLOWED_CHANNELS = [
     1571367753376604170
+]
+
+FAIMILY_ALLOWED_CHANNELS = [
+    1542151655724687410,
+    1571878915516014684
 ]
 
 # Target group channels updated as requested
@@ -105,7 +111,7 @@ MARVIN_ALLOWED_CHANNELS = [
 
 ALLOWED_GUILDS = [
     MARVIN_SERVER_ID,
-    1502674163687624885,  # fAImily
+    FAIMILY_SERVER_ID,
     1529063159124590602,  # Aikin
     MAXIMILLIAN_SERVER_ID # Maximillian
 ]
@@ -149,6 +155,10 @@ async def on_message(message):
 
     # Channel restriction specific ONLY to Marvin's server (limited to the 2 specified channels)
     if message.guild and message.guild.id == MARVIN_SERVER_ID and message.channel.id not in MARVIN_ALLOWED_CHANNELS:
+        return
+
+    # Channel restriction specific ONLY to FAIMILY's server (limited to the 2 specified channels)
+    if message.guild and message.guild.id == FAIMILY_SERVER_ID and message.channel.id not in FAIMILY_ALLOWED_CHANNELS:
         return
 
     # Channel restriction specific ONLY to Maximillian's server (limited to the 1 specified channel)
