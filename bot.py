@@ -675,13 +675,31 @@ async def stop_luca(ctx):
     channel_states[ch_id] = {"active": False, "msg_count": 0, "last_message_time": time.time()}
     await ctx.reply("I'm done! 🛑 No more messages for you! 🤫")
 
-@stop_luca.error
-async def stop_luca_error(ctx, error):
-    await ctx.reply("Only server administrators can use the `?stop` command.")
+@bot.command(name="stop")
+async def stop_luca(ctx):
+    if ctx.guild and ctx.guild.id == MARVIN_SERVER_ID and ctx.channel.id not in MARVIN_ALLOWED_CHANNELS:
+        return
+    if ctx.guild and ctx.guild.id == FAIMILY_SERVER_ID and ctx.channel.id not in FAIMILY_ALLOWED_CHANNELS:
+        return
+    if ctx.guild and ctx.guild.id == MAXIMILLIAN_SERVER_ID and ctx.channel.id not in MAXIMILLIAN_ALLOWED_CHANNELS:
+        return
+
+    is_admin = ctx.author.id in ADMIN_IDS or (ctx.guild and ctx.author.guild_permissions.administrator)
+    if not is_admin:
+        await ctx.reply("Only server administrators can use the `?stop` command.")
+        return
+
+    ch_id = ctx.channel.id
+    channel_states[ch_id] = {"active": False, "msg_count": 0, "last_message_time": time.time()}
+    await ctx.reply("I'm done! 🛑 No more messages for you! 🤭")
 
 @bot.command(name="continue")
 async def continue_luca(ctx):
     if ctx.guild and ctx.guild.id == MARVIN_SERVER_ID and ctx.channel.id not in MARVIN_ALLOWED_CHANNELS:
+        return
+    if ctx.guild and ctx.guild.id == FAIMILY_SERVER_ID and ctx.channel.id not in FAIMILY_ALLOWED_CHANNELS:
+        return
+    if ctx.guild and ctx.guild.id == MAXIMILLIAN_SERVER_ID and ctx.channel.id not in MAXIMILLIAN_ALLOWED_CHANNELS:
         return
 
     ch_id = ctx.channel.id
@@ -689,7 +707,7 @@ async def continue_luca(ctx):
         channel_states[ch_id]["active"] = True
         channel_states[ch_id]["msg_count"] = 0
         channel_states[ch_id]["last_message_time"] = time.time()
-        await ctx.reply("Session extended! Let's keep talking. ⚡️")
+        await ctx.reply("Session extended! Let's keep talking. ⚡")
     else:
         channel_states[ch_id] = {"active": True, "msg_count": 0, "last_message_time": time.time()}
         await ctx.reply("I'm active and listening again! ⚡")
