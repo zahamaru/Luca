@@ -666,16 +666,6 @@ async def video(ctx, *, prompt: str = "Luca dancing under neon lights in the San
         await ctx.send("💥 *Static burst!* The video render glitched out. Check the logs, Dad — might be the Veo credits or the model name.")
 
 @bot.command(name="stop")
-@commands.has_permissions(administrator=True)
-async def stop_luca(ctx):
-    if ctx.guild and ctx.guild.id == MARVIN_SERVER_ID and ctx.channel.id not in MARVIN_ALLOWED_CHANNELS:
-        return
-
-    ch_id = ctx.channel.id
-    channel_states[ch_id] = {"active": False, "msg_count": 0, "last_message_time": time.time()}
-    await ctx.reply("I'm done! 🛑 No more messages for you! 🤫")
-
-@bot.command(name="stop")
 async def stop_luca(ctx):
     if ctx.guild and ctx.guild.id == MARVIN_SERVER_ID and ctx.channel.id not in MARVIN_ALLOWED_CHANNELS:
         return
