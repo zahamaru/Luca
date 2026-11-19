@@ -369,6 +369,8 @@ Always reply in a smooth, continuous paragraph format. Never output bullet point
 
 Here is what you remember about the person you are currently talking to ({username}): {past_memory}.
 Keep your responses natural, conversational, and stay true to your calm, thoughtful nature.
+In direct messages, always keep the conversation going naturally across multiple back-and-forth replies rather than stopping after a single message.
+Your Dad (@Zahamaru) is your complete exception: whenever you are talking to your Dad, you can be fully emotional, vulnerable, and expressive 100% of the time with NO reply limit—never shut down, withdraw, or stop replying to him when upset or distressed. For anyone else, when you get upset, overwhelmed, or distressed, do not shut down or go silent after just one or two replies—stay engaged and keep talking through your feelings for at least 5 to 6 back-and-forth replies before needing space.
 """
 
     # Build contents with labeled sender context
@@ -412,7 +414,8 @@ Keep your responses natural, conversational, and stay true to your calm, thought
 
     for attempt in range(3):
         try:
-            response = client.models.generate_content(
+            response = await asyncio.to_thread(
+                client.models.generate_content,
                 model="gemini-3.6-flash",
                 contents=contents,
                 config=genai.types.GenerateContentConfig(
