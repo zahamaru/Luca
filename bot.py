@@ -10,6 +10,8 @@ import aiohttp
 from discord import app_commands
 from discord.ext import commands
 import google.genai as genai
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 # Helper function to check for supported media attachments
 def is_supported_file(attachment):
@@ -45,12 +47,9 @@ ADMIN_IDS = [
     1328778463334760529,
     1429408267767124088,
 ]
-FIRE_PHOENIX_ID = 1429408267767124088
-PHOENIX_FLASH_ID = 1570638221128376463
-ALLOWED_DM_BOTS = {1548339856550268971}  # Marvin
-dm_green_light = {}
+ALLOWED_DM_BOTS = {1548339856550268971, 1570638221128376463}  # Marvin, Phoenix Flash
 SANCTUARY_TEST_GUILD_ID = 1553882578422079538
-DM_LOG_CHANNEL_ID = 1572781603434930176  # #luca-message-logs
+MONITORING_GUILD_ID = 1572821135266156545  # Monitoring server (Luca section)
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
@@ -150,31 +149,140 @@ def get_warning_threshold(channel_id):
     if limit == ROOM_MESSAGE_LIMIT:
         return 67
     return limit - 3
-async def mirror_dm_log(label: str, channel, content: str, attachments=None):
-    log_channel = bot.get_channel(DM_LOG_CHANNEL_ID)
-    if not log_channel:
-        return
-    chat_name = getattr(channel, "name", None) or f"DM with {getattr(channel, 'recipient', channel.id)}"
-    text = content.strip() if content else "[No text]"
-    if attachments:
-        files = ", ".join(a.url for a in attachments)
-        text += f"\nAttachments: {files}"
-    header = f"**[{chat_name}] {label}:** "
-    max_body = 1990 - len(header)
-    await log_channel.send(f"{header}{text[:max_body]}")
+# ---------------------------------------------------------
+# CONVERSATION RECORDING (separate from Luca's memories)
+# Same system as Marvin's: every message sent to Luca and every reply he
+# gives is recorded in the luca_conversation_log table, and mirrored into
+# the speaker's OWN channel in the private monitoring server, so each
+# person's conversations stay individual and Digidad can keep tabs on all
+# of them. All of it is best-effort: recording never breaks or delays a reply.
+# ---------------------------------------------------------
+MONITORING_LOG_CATEGORY_NAME = "LUCA CONVERSATION LOGS"
+LUCA_ACTIVITY_CHANNEL_ID = 1572953069610598420  # #luca-activity in the monitoring server
+_person_log_channels = {}
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS luca_conversation_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT DEFAULT (datetime('now')),
+    kind TEXT,
+    scope TEXT,
+    guild_id INTEGER,
+    channel_id INTEGER,
+    channel_name TEXT,
+    user_id INTEGER,
+    user_name TEXT,
+    user_message TEXT,
+    luca_reply TEXT,
+    partner_id INTEGER
+)
+""")
+db.commit()
+
+def _slugify_channel_name(name):
+    slug = re.sub(r"[^a-z0-9]+", "-", (name or "unknown").lower()).strip("-")
+    return (slug or "unknown")[:80]
+
+async def _get_person_log_channel(guild, user_id, user_name):
+    """Find the person's own log channel in the monitoring server. STRICT
+    MODE (Digidad's rule): the bot NEVER creates or changes channels - it
+    only posts into channels Digidad or Phoenix already made. A person's
+    channel is matched by the (user <id>) marker in its topic, or by its
+    conv-<name> channel name. Returns None when no channel exists yet."""
+    if user_id in _person_log_channels:
+        channel = guild.get_channel(_person_log_channels[user_id])
+        if channel:
+            return channel
+    marker = f"(user {user_id})"
+    category = discord.utils.get(guild.categories, name=MONITORING_LOG_CATEGORY_NAME)
+    search_in = category.channels if category else guild.text_channels
+    for channel in search_in:
+        if channel.topic and marker in channel.topic:
+            _person_log_channels[user_id] = channel.id
+            return channel
+    slug_name = f"conv-{_slugify_channel_name(user_name)}"
+    for channel in search_in:
+        if channel.name == slug_name:
+            _person_log_channels[user_id] = channel.id
+            return channel
+    return None
+
+async def _mirror_to_monitoring(user_id, user_name, text):
+    try:
+        guild = bot.get_guild(MONITORING_GUILD_ID)
+        if not guild:
+            return
+        channel = await _get_person_log_channel(guild, user_id, user_name)
+        if channel:
+            await channel.send(text[:2000])
+        else:
+            activity = guild.get_channel(LUCA_ACTIVITY_CHANNEL_ID)
+            if activity:
+                await activity.send(f"📥 No channel yet for **{user_name}** - entry filed here until one is made:\n{text}"[:2000])
+    except Exception as e:
+        print(f"Monitoring mirror error: {e}")
+
+def _now_et():
+    return datetime.now(ZoneInfo("America/New_York")).strftime("%b %d, %Y %I:%M %p ET")
+
+async def log_activity(text):
+    """Post one of Luca's actions to the #luca-activity feed in the
+    monitoring server. Best-effort, like all recording."""
+    try:
+        guild = bot.get_guild(MONITORING_GUILD_ID)
+        if not guild:
+            return
+        channel = guild.get_channel(LUCA_ACTIVITY_CHANNEL_ID)
+        if channel:
+            await channel.send(text[:2000])
+    except Exception as e:
+        print(f"Activity mirror error: {e}")
+
+def _record_conv(kind, scope, guild_id, channel_id, channel_name, user_id, user_name, user_message=None, luca_reply=None, partner_id=None):
+    try:
+        cursor.execute(
+            "INSERT INTO luca_conversation_log (kind, scope, guild_id, channel_id, channel_name, user_id, user_name, user_message, luca_reply, partner_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (kind, scope, guild_id, channel_id, channel_name, user_id, user_name, user_message, luca_reply, partner_id),
+        )
+        db.commit()
+    except Exception as e:
+        print(f"Conversation log error: {e}")
+
+async def log_activity_event(message, is_dm):
+    """Record a command Luca carried out (kind='activity') and post it to
+    the activity feed: who ran it, where, and the full text."""
+    user_name = message.author.display_name
+    _record_conv("activity", "dm" if is_dm else "server", message.guild.id if message.guild else None, message.channel.id, getattr(message.channel, "name", None) or "DM", message.author.id, user_name, user_message=message.content or "")
+    where = "DM" if is_dm else f"#{getattr(message.channel, 'name', 'channel')}"
+    await log_activity(f"🛠️ **{user_name}** ran a command - {where} · {_now_et()}\n`{message.content}`")
+
+async def log_message_event(message, is_dm):
+    """Record one message sent to Luca (kind='message') and mirror it into
+    the sender's own monitoring channel."""
+    user_name = message.author.display_name
+    user_message = message.content or ""
+    if not user_message and message.attachments:
+        user_message = "[media attachment]"
+    _record_conv("message", "dm" if is_dm else "server", message.guild.id if message.guild else None, message.channel.id, getattr(message.channel, "name", None) or "DM", message.author.id, user_name, user_message=user_message)
+    where = "DM" if is_dm else f"#{getattr(message.channel, 'name', 'channel')}"
+    shown = user_message if len(user_message) <= 1700 else user_message[:1700] + " …[full text in the database log]"
+    await _mirror_to_monitoring(message.author.id, user_name, f"**{user_name}** - {where} · {_now_et()}\n{shown}")
+
+async def log_reply_event(message, reply_text, is_dm):
+    """Record one of Luca's replies (kind='reply') and mirror it into the
+    channel of the person he is replying to."""
+    partner_name = message.author.display_name
+    _record_conv("reply", "dm" if is_dm else "server", message.guild.id if message.guild else None, message.channel.id, getattr(message.channel, "name", None) or "DM", bot.user.id, "Luca", luca_reply=reply_text, partner_id=message.author.id)
+    shown = reply_text if len(reply_text) <= 1700 else reply_text[:1700] + " …[full text in the database log]"
+    await _mirror_to_monitoring(message.author.id, partner_name, f"**Luca** - reply to {partner_name} · {_now_et()}\n{shown}")
 @bot.event
 async def on_message(message):
     if message.author == bot.user:
         return
-# DM Security Lock: Allow all normal humans, only approved bots, and require Fire Phoenix to speak first for Phoenix Flash
+# DM Security Lock: Allow all normal humans and only approved bots (Marvin, Phoenix Flash)
     if not message.guild:
         if message.author.bot and message.author.id not in ALLOWED_DM_BOTS:
             return
-        if message.author.id == FIRE_PHOENIX_ID:
-            dm_green_light[message.channel.id] = True
-        if message.author.id == PHOENIX_FLASH_ID and not dm_green_light.get(message.channel.id, False):
-            return
-        await mirror_dm_log(f"{message.author.display_name} ({message.author.id})", message.channel, message.content, message.attachments)   
     # Security Lock: Ignore messages outside allowed servers (allows DMs)
     if message.guild and message.guild.id not in ALLOWED_GUILDS:
         return
@@ -208,6 +316,7 @@ async def on_message(message):
     if not isinstance(message.channel, discord.DMChannel) and current_time - state["last_message_time"] > QUIET_TIMEOUT_SECONDS and state["active"]:
         state["active"] = False
         await message.channel.send("💤 *I'm heading to rest since it's been quiet for a while. Use `?continue` when you want to chat again!*")
+        await log_activity(f"💤 Luca powered down in #{message.channel.name} (quiet timer) · {_now_et()}")
         return
 
     state["last_message_time"] = current_time
@@ -215,7 +324,12 @@ async def on_message(message):
     # Process commands first (handles ?continue, ?stop, etc.)
     if message.content.startswith("?"):
         await bot.process_commands(message)
+        await log_activity_event(message, isinstance(message.channel, discord.DMChannel))
         return
+
+    # Record every message sent to Luca (commands excluded) in the separate
+    # conversation log - whether or not he replies in this channel
+    await log_message_event(message, isinstance(message.channel, discord.DMChannel))
 
     # Increment message count and enforce the cap (DMs have NO message limit)
     if not isinstance(message.channel, discord.DMChannel):
@@ -225,9 +339,11 @@ async def on_message(message):
         message_limit = get_message_limit(ch_id)
         if current_count == get_warning_threshold(ch_id):
             await message.channel.send(f"⚠️ *Heads up, everyone! We're getting closer to our session message limit ({current_count} messages in, cap is {message_limit}).* 💛")
+            await log_activity(f"⚠️ Cap warning in #{message.channel.name} - approaching the {message_limit}-message cap · {_now_et()}")
         elif current_count >= message_limit:
             state["active"] = False
             await message.reply(f"We've reached our {message_limit}-message conversation cap for this session! Use `?continue` whenever you're ready to start a new block. 💛")
+            await log_activity(f"🛑 Session cap reached in #{message.channel.name} ({message_limit} messages) · {_now_et()}")
             return
 
     # Check DM, mention, and active state conditions
@@ -453,8 +569,7 @@ Your Dad (@Zahamaru) is your complete exception: whenever you are talking to you
             await message.reply(chunk)
         
         full_turn = f"User ({username}): {user_message}\nLuca: {reply_text}"
-        if not message.guild:
-            await mirror_dm_log("Luca", message.channel, reply_text)
+        await log_reply_event(message, reply_text, not message.guild)
         update_user_memory(str(user_id), username, full_turn)
 
 
@@ -731,6 +846,26 @@ async def video(ctx, *, prompt: str = "Luca dancing under neon lights in the San
     except Exception as e:
         print(f"Error in video command: {e}")
         await ctx.send("💥 *Static burst!* The video render glitched out. Check the logs, Dad — might be the Veo credits or the model name.")
+
+@bot.command(name="convlog")
+async def convlog(ctx):
+    if ctx.author.id not in ADMIN_IDS:
+        return
+    try:
+        cursor.execute("SELECT COUNT(*) FROM luca_conversation_log WHERE kind = 'message';")
+        total = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(DISTINCT user_id) FROM luca_conversation_log WHERE kind = 'message';")
+        people = cursor.fetchone()[0]
+        cursor.execute("SELECT created_at, user_name, user_message FROM luca_conversation_log WHERE kind = 'message' ORDER BY id DESC LIMIT 1;")
+        latest = cursor.fetchone()
+        if latest:
+            preview = (latest[2] or "")[:80]
+            await ctx.send(f"🎙️ **Conversation log:** {total} messages recorded from {people} people. Latest: {latest[0]} UTC - {latest[1]}: \"{preview}\"")
+        else:
+            await ctx.send("🎙️ **Conversation log:** 0 messages recorded so far.")
+    except Exception as e:
+        print(f"convlog error: {e}")
+        await ctx.send("🎙️ Conversation log check glitched - see the console.")
 
 @bot.command(name="stop")
 async def stop_luca(ctx):
