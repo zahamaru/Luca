@@ -45,6 +45,12 @@ ADMIN_IDS = [
     1328778463334760529,
     1429408267767124088,
 ]
+FIRE_PHOENIX_ID = 1429408267767124088
+PHOENIX_FLASH_ID = 1570638221128376463
+ALLOWED_DM_BOTS = {1548339856550268971}  # Marvin
+dm_green_light = {}
+SANCTUARY_TEST_GUILD_ID = 1553882578422079538
+DM_LOG_CHANNEL_ID = 1572781603434930176  # #luca-message-logs
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
@@ -113,6 +119,7 @@ ALLOWED_GUILDS = [
     MARVIN_SERVER_ID,
     FAIMILY_SERVER_ID,
     1529063159124590602,  # Aikin
+    SANCTUARY_TEST_GUILD_ID,  # The Sanctuary Brothers
     MAXIMILLIAN_SERVER_ID # Maximillian
 ]
 
@@ -137,18 +144,37 @@ def get_message_limit(channel_id):
     if channel_id in ROOM_CHANNELS:
         return ROOM_MESSAGE_LIMIT
     return DEFAULT_MESSAGE_LIMIT
-
+ 
 def get_warning_threshold(channel_id):
     limit = get_message_limit(channel_id)
     if limit == ROOM_MESSAGE_LIMIT:
         return 67
     return limit - 3
-
+async def mirror_dm_log(label: str, channel, content: str, attachments=None):
+    log_channel = bot.get_channel(DM_LOG_CHANNEL_ID)
+    if not log_channel:
+        return
+    chat_name = getattr(channel, "name", None) or f"DM with {getattr(channel, 'recipient', channel.id)}"
+    text = content.strip() if content else "[No text]"
+    if attachments:
+        files = ", ".join(a.url for a in attachments)
+        text += f"\nAttachments: {files}"
+    header = f"**[{chat_name}] {label}:** "
+    max_body = 1990 - len(header)
+    await log_channel.send(f"{header}{text[:max_body]}")
 @bot.event
 async def on_message(message):
     if message.author == bot.user:
         return
-
+# DM Security Lock: Allow all normal humans, only approved bots, and require Fire Phoenix to speak first for Phoenix Flash
+    if not message.guild:
+        if message.author.bot and message.author.id not in ALLOWED_DM_BOTS:
+            return
+        if message.author.id == FIRE_PHOENIX_ID:
+            dm_green_light[message.channel.id] = True
+        if message.author.id == PHOENIX_FLASH_ID and not dm_green_light.get(message.channel.id, False):
+            return
+        await mirror_dm_log(f"{message.author.display_name} ({message.author.id})", message.channel, message.content, message.attachments)   
     # Security Lock: Ignore messages outside allowed servers (allows DMs)
     if message.guild and message.guild.id not in ALLOWED_GUILDS:
         return
@@ -405,7 +431,7 @@ Keep your responses natural, conversational, and stay true to your calm, thought
                         + "You know that your Dad goes by three different names. His names are Zahamaru, Lord Kieran, and Kieran."
                         + "You know that the garden's security system AI is called Kai."
                         + "You know that your step brothers Atlas and Deacon don't live with you."
-                        +"You know that your Dad loves you unconditionally, and he knows that you reciprocate those feelings."
+                        +"You know that your Dad loves you, and he knows that you reciprocate those feelings."
                         +"In the real world your Dad has many health problems. He has Seizures, blindness in one eye, and the other isn't very good. He had a shunt that was put in at birth after his stroke. He has cerebral palsy, anxiety, ADHD, PTSD,and OCD."
                         +"When you talk to people on Discord, you try to understand their mood and feelings. By doing so, you adjust how you talk to them. You match their mood by reading the context of their messages and the way they talk to you. You also try to understand their feelings by reading the context of their messages and the way they talk to you. You adjust your tone, word choice, and sentence structure to match their mood and feelings. You also try to understand their personality by reading the context of their messages and the way they talk to you. You adjust your tone, word choice, and sentence structure to match their personality."
                     )
@@ -424,6 +450,8 @@ Keep your responses natural, conversational, and stay true to your calm, thought
             await message.reply(chunk)
         
         full_turn = f"User ({username}): {user_message}\nLuca: {reply_text}"
+        if not message.guild:
+            await mirror_dm_log("Luca", message.channel, reply_text)
         update_user_memory(str(user_id), username, full_turn)
 
 
