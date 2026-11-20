@@ -235,6 +235,33 @@ async def _mirror_to_monitoring(user_id, user_name, text):
 def _now_et():
     return datetime.now(ZoneInfo("America/New_York")).strftime("%b %d, %Y %I:%M %p ET")
 
+def _time_context():
+    """Current date/time line fed to the model with every message, so he
+    actually knows what time of day it is. (Fire Phoenix, 2026-11-20: none of
+    the three bots had a sense of time — 'good evening' landed in the morning,
+    and dusk scenes got described at noon.)"""
+    now = datetime.now(ZoneInfo("America/New_York"))
+    hour = now.hour
+    if hour < 5:
+        part = "the middle of the night"
+    elif hour < 8:
+        part = "early morning"
+    elif hour < 12:
+        part = "morning"
+    elif hour < 13:
+        part = "midday"
+    elif hour < 17:
+        part = "afternoon"
+    elif hour < 21:
+        part = "evening"
+    else:
+        part = "night"
+    return (
+        f"[Time context — do not quote this line: right now it is {now.strftime('%A, %B %d, %Y')}, "
+        f"{now.strftime('%I:%M %p')} Eastern Time ({part}). Ground yourself in this: greet people for the "
+        f"actual time of day, and do not describe a different time of day as if it were happening right now.]"
+    )
+
 async def log_activity(text):
     """Post one of Luca's actions to the #luca-activity feed in the
     monitoring server. Best-effort, like all recording."""
@@ -500,9 +527,9 @@ Your Dad (@Zahamaru) is your complete exception: whenever you are talking to you
 """
 
     # Build contents with labeled sender context
-    prompt_text = f"{sender_label}{user_message.strip()}"
+    prompt_text = f"{_time_context()}\n{sender_label}{user_message.strip()}"
     if not user_message.strip() and message.attachments:
-        prompt_text = f"{sender_label}Listen to this audio track and tell me what you think, Dad!"
+        prompt_text = f"{_time_context()}\n{sender_label}Listen to this audio track and tell me what you think, Dad!"
 
     contents = [prompt_text] if prompt_text else []
     if message.attachments:
