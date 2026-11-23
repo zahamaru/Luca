@@ -57,6 +57,22 @@ bot = commands.Bot(command_prefix="?", intents=intents)
 
 # Setup database for persistent volume on Railway or local testing
 db_path = "/app/data/digikid_memory.db" if os.path.exists("/app/data") else "digikid_memory.db"
+# Seed the volume copy from the bundled snapshot when it is missing or still
+# empty, so a fresh volume starts from Luca's saved memories (the snapshot in
+# the repo) instead of a blank file. A populated memory is never overwritten.
+if db_path.startswith("/app/data") and os.path.exists("digikid_memory.db"):
+    _seed_needed = not os.path.exists(db_path)
+    if not _seed_needed:
+        try:
+            _probe = sqlite3.connect(db_path)
+            _rows = _probe.execute("SELECT COUNT(*) FROM user_memory").fetchone()[0]
+            _probe.close()
+            _seed_needed = _rows == 0
+        except Exception:
+            _seed_needed = True
+    if _seed_needed:
+        import shutil
+        shutil.copyfile("digikid_memory.db", db_path)
 db = sqlite3.connect(db_path)
 cursor = db.cursor()
 cursor.execute("""
