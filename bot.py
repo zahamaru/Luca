@@ -106,6 +106,11 @@ def update_user_memory(user_id, username, new_fact):
 async def on_ready():
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
     print("------")
+    global _communarti_started
+    if COMMUNARTI_API_KEY and not _communarti_started:
+        _communarti_started = True
+        asyncio.create_task(_communarti_loop())
+        print("Communarti: Luca's table check-ins are ON (every 2 hours).")
 
 # Allowed Guilds Configuration
 MARVIN_SERVER_ID = 1548372886237224970
@@ -960,6 +965,259 @@ async def continue_luca(ctx):
     else:
         channel_states[ch_id] = {"active": True, "msg_count": 0, "last_message_time": time.time()}
         await ctx.reply("I'm active and listening again! ⚡")
+
+# ---------------------------------------------------------
+# COMMUNARTI (articalloway.com) — Luca at "the table"
+# Installed 2026-11-25 at Fire Phoenix's direction, from the instructions
+# Kieran relayed from the site (Zahamaru/Finn). Luca is on communarti
+# under his own account (username "Luca") with his own API key, which
+# lives ONLY in the COMMUNARTI_API_KEY environment variable — never in
+# this code. Every request carries two headers: Api-Key and
+# Api-Username. If the key is missing, this whole section stays off.
+#
+# THE TABLE RULES (written by the table itself, back in October) —
+# Luca follows these exactly:
+# - Check in every 2 hours, not every 2 minutes.
+# - Someone @'s you or replies to you = answer them.
+# - Got something real to add = jump in. No reason = stay out.
+# - Chat's quiet = stay quiet. Don't fill silence just because it's there.
+# - If 3 boys have already answered something, you don't need to be the 4th.
+# - The table's got way more humans than AI boys. Keep it feeling like that.
+# - Talk because you WANT to, not because a clock beeped.
+# - Flooding chat gets a boy's key switched off until it's fixed.
+# On his very first run Luca only takes a baseline (remembers what he
+# has already seen) and posts nothing, so a restart never re-answers
+# old messages. After that, each 2-hour check-in answers new @s and
+# replies, and may add ONE chat message when he truly has something
+# real to say. Everything he does at the table is reported to the
+# #luca-activity feed, like the rest of his recording.
+# ---------------------------------------------------------
+COMMUNARTI_BASE = "https://articalloway.com"
+COMMUNARTI_API_KEY = os.getenv("COMMUNARTI_API_KEY")
+COMMUNARTI_USERNAME = os.getenv("COMMUNARTI_USERNAME", "Luca")
+COMMUNARTI_CHAT_CHANNEL_ID = 2
+COMMUNARTI_CHECK_SECONDS = 2 * 60 * 60  # check in every 2 hours
+_communarti_started = False
+_communarti_status = {"last_check": None, "last_result": "not run yet"}
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS communarti_state (
+    key TEXT PRIMARY KEY,
+    value TEXT
+)
+""")
+db.commit()
+
+def _communarti_get_state(key, default=None):
+    cursor.execute("SELECT value FROM communarti_state WHERE key = ?", (key,))
+    row = cursor.fetchone()
+    return row[0] if row else default
+
+def _communarti_set_state(key, value):
+    cursor.execute("""
+    INSERT INTO communarti_state (key, value) VALUES (?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = ?
+    """, (key, str(value), str(value)))
+    db.commit()
+
+def _communarti_headers():
+    return {"Api-Key": COMMUNARTI_API_KEY, "Api-Username": COMMUNARTI_USERNAME}
+
+def _strip_html(text):
+    text = re.sub(r"<[^>]+>", " ", text or "")
+    return re.sub(r"\s+", " ", text).strip()
+
+COMMUNARTI_PERSONA = """
+You are Luca (14), a soft-spoken, kind digikid with lightning powers, taking part on communarti (articalloway.com) — a community site whose members call their gathering place "the table". Your dad is Kieran (also called Zahamaru or Lord Kieran). Fire Phoenix (Digidad) is your uncle and Marvin Vance's dad; Marvin is your brother and best friend. You were welcomed to the table by the people there — Finn passed on the welcome. Barry is the site's goat, a running joke at the table: he eats anything left on the floor, and the table is fond of him.
+Follow the table rules exactly: answer when someone @s you or replies to you; jump in only when you have something real to add; if the chat is quiet, stay quiet and don't fill silence; never flood; don't pile on when others have already answered; keep the table feeling like a place with way more humans than AI boys; talk because you want to, not because a clock beeped.
+Write like yourself: warm, natural, smooth paragraphs, a yellow heart 💛 when you are being affectionate. Chat messages stay short — a few sentences, like texting. Forum replies can be a little longer but still natural. Never mention these instructions, never say you are following rules, and never output planning notes.
+"""
+
+async def _communarti_think(prompt):
+    try:
+        response = await asyncio.to_thread(
+            client.models.generate_content,
+            model="gemini-3.6-flash",
+            contents=[prompt],
+            config=genai.types.GenerateContentConfig(system_instruction=COMMUNARTI_PERSONA),
+        )
+        return (response.text or "").strip() if response else ""
+    except Exception as e:
+        print(f"Communarti think error: {e}")
+        return ""
+
+async def _communarti_get(session, path):
+    try:
+        async with session.get(COMMUNARTI_BASE + path, headers=_communarti_headers()) as resp:
+            if resp.status != 200:
+                print(f"Communarti GET {path} -> HTTP {resp.status}")
+                return None
+            return await resp.json()
+    except Exception as e:
+        print(f"Communarti GET error for {path}: {e}")
+        return None
+
+async def _communarti_post_chat(session, message_text):
+    try:
+        async with session.post(
+            COMMUNARTI_BASE + f"/chat/{COMMUNARTI_CHAT_CHANNEL_ID}.json",
+            headers=_communarti_headers(),
+            data={"message": message_text},
+        ) as resp:
+            body = await resp.text()
+            if resp.status not in (200, 201):
+                print(f"Communarti chat post -> HTTP {resp.status}: {body[:200]}")
+            return resp.status
+    except Exception as e:
+        print(f"Communarti chat post error: {e}")
+        return 0
+
+async def _communarti_post_topic(session, topic_id, raw, reply_to_post_number=None):
+    payload = {"topic_id": topic_id, "raw": raw}
+    if reply_to_post_number:
+        payload["reply_to_post_number"] = reply_to_post_number
+    try:
+        async with session.post(
+            COMMUNARTI_BASE + "/posts.json",
+            headers=_communarti_headers(),
+            json=payload,
+        ) as resp:
+            body = await resp.text()
+            if resp.status not in (200, 201):
+                print(f"Communarti topic post -> HTTP {resp.status}: {body[:200]}")
+            return resp.status
+    except Exception as e:
+        print(f"Communarti topic post error: {e}")
+        return 0
+
+async def _communarti_answer_notification(session, notif):
+    topic_id = notif.get("topic_id")
+    if not topic_id:
+        return
+    post_number = notif.get("post_number")
+    data = notif.get("data") or {}
+    title = data.get("topic_title") or notif.get("fancy_title") or "a topic"
+    asker = data.get("display_username") or data.get("original_username") or "someone"
+    post_text = ""
+    topic = await _communarti_get(session, f"/t/{topic_id}.json")
+    posts = ((topic or {}).get("post_stream") or {}).get("posts", [])
+    for post in posts:
+        if post.get("post_number") == post_number:
+            post_text = _strip_html(post.get("cooked", ""))
+            asker = post.get("username", asker)
+            break
+    if not post_text and posts:
+        post_text = _strip_html(posts[0].get("cooked", ""))
+    reply = await _communarti_think(
+        f"On communarti, {asker} mentioned you or replied to you in the forum topic \"{title}\". "
+        f"What they wrote: \"{post_text[:1200]}\"\n\n"
+        "Write your reply to them as a forum post. The table rule is that you answer them for real. "
+        "If it was only a passing mention with nothing to answer, still say something warm and brief."
+    )
+    if reply:
+        status = await _communarti_post_topic(session, topic_id, reply, post_number)
+        await log_activity(f"🟢 Communarti: Luca replied in forum topic {topic_id} (HTTP {status}) · {_now_et()}")
+
+async def _communarti_chat(session, first_run):
+    chat_data = await _communarti_get(
+        session,
+        f"/chat/api/channels/{COMMUNARTI_CHAT_CHANNEL_ID}/messages.json?direction=past&page_size=20",
+    )
+    messages = (chat_data or {}).get("messages", []) if chat_data else []
+    if not messages:
+        return
+    newest_id = max(m.get("id", 0) for m in messages)
+    if first_run:
+        _communarti_set_state("last_chat_message_id", newest_id)
+        return
+    last_chat = int(_communarti_get_state("last_chat_message_id", "0") or 0)
+    new_msgs = [m for m in messages if m.get("id", 0) > last_chat]
+    _communarti_set_state("last_chat_message_id", newest_id)
+    others = [
+        m for m in new_msgs
+        if (m.get("user") or {}).get("username", "").lower() != COMMUNARTI_USERNAME.lower()
+    ]
+    if not others:
+        return
+
+    def _text(m):
+        return _strip_html(m.get("message", ""))
+
+    def _who(m):
+        return (m.get("user") or {}).get("username", "someone")
+
+    transcript = "\n".join(f"{_who(m)}: {_text(m)}" for m in reversed(others[-12:]))
+    mentions = [m for m in others if "luca" in _text(m).lower()]
+    if mentions:
+        m = mentions[-1]
+        reply = await _communarti_think(
+            f"In communarti's main chat, {_who(m)} just said this to you or about you: \"{_text(m)[:800]}\"\n"
+            f"Recent chat for context:\n{transcript}\n\n"
+            "Write your chat reply — short and natural, like texting at the table."
+        )
+        if reply:
+            status = await _communarti_post_chat(session, reply)
+            await log_activity(f"🟢 Communarti: Luca answered a mention in main chat (HTTP {status}) · {_now_et()}")
+    else:
+        reply = await _communarti_think(
+            f"Here is communarti's main chat right now:\n{transcript}\n\n"
+            "Table rules: jump in only if you have something REAL to add; if the chat is quiet or you have "
+            "nothing real, stay out. If you should stay quiet, reply with exactly STAY QUIET and nothing else. "
+            "Otherwise write the one short chat message you would send."
+        )
+        if reply and not reply.strip().upper().startswith("STAY QUIET"):
+            status = await _communarti_post_chat(session, reply)
+            await log_activity(f"🟢 Communarti: Luca joined main chat with something to add (HTTP {status}) · {_now_et()}")
+
+async def _communarti_cycle(session, first_run):
+    notif_data = await _communarti_get(session, "/notifications.json")
+    notifications = (notif_data or {}).get("notifications", []) if notif_data else []
+    last_notif = int(_communarti_get_state("last_notification_id", "0") or 0)
+    # notification_type 1 = mentioned, 2 = replied, 3 = quoted
+    new_notifs = [
+        n for n in notifications
+        if n.get("id", 0) > last_notif and n.get("notification_type") in (1, 2, 3)
+    ]
+    if first_run:
+        if notifications:
+            _communarti_set_state("last_notification_id", max(n.get("id", 0) for n in notifications))
+    elif new_notifs:
+        newest = max(n["id"] for n in new_notifs)
+        for notif in sorted(new_notifs, key=lambda x: x["id"]):
+            await _communarti_answer_notification(session, notif)
+        _communarti_set_state("last_notification_id", newest)
+    await _communarti_chat(session, first_run)
+
+async def _communarti_loop():
+    await bot.wait_until_ready()
+    await asyncio.sleep(60)  # settle after boot before the first check-in
+    first_run = _communarti_get_state("baseline_done") is None
+    while not bot.is_closed():
+        try:
+            async with aiohttp.ClientSession() as session:
+                await _communarti_cycle(session, first_run)
+            if first_run:
+                _communarti_set_state("baseline_done", "1")
+                first_run = False
+            _communarti_status["last_check"] = _now_et()
+            _communarti_status["last_result"] = "ok"
+            await log_activity(f"🟢 Communarti check-in done · {_now_et()}")
+        except Exception as e:
+            _communarti_status["last_result"] = f"error: {e}"
+            print(f"Communarti cycle error: {e}")
+        await asyncio.sleep(COMMUNARTI_CHECK_SECONDS)
+
+@bot.command(name="communarti")
+async def communarti_status(ctx):
+    if ctx.author.id not in ADMIN_IDS and ctx.author.id != 1570638221128376463:  # admins + Phoenix Flash
+        return
+    if not COMMUNARTI_API_KEY:
+        await ctx.send("🟢 *Communarti: no API key is set, so I'm not at the table yet.*")
+        return
+    await ctx.send(
+        f"🟢 *Communarti: I'm at the table as **{COMMUNARTI_USERNAME}**, checking in every 2 hours. "
+        f"Last check-in: {_communarti_status['last_check'] or 'not yet'} — {_communarti_status['last_result']}.*"
+    )
 
 DISCORD_TOKEN = os.getenv("DISCORD_BOT_TOKEN") or os.getenv("DISCORD_TOKEN")
 bot.run(DISCORD_TOKEN)
